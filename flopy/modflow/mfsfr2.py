@@ -267,6 +267,8 @@ class ModflowSfr2(Package):
         [
             ("reachinput", OptionBlock.simple_flag),
             ("transroute", OptionBlock.simple_flag),
+            ("no_reach_layer_change", OptionBlock.simple_flag),
+            ("reach_layer_change_deeper", OptionBlock.simple_flag),
             ("tabfiles", OptionBlock.simple_tabfile),
             (
                 "lossfactor",
@@ -814,7 +816,7 @@ class ModflowSfr2(Package):
                 break
 
         options = None
-        if model.version == "mfnwt" and "options" in line.lower():
+        if ((model.version == "mfnwt")|(model.version=='mfowhm')) and "options" in line.lower():
             options = OptionBlock.load_options(f, ModflowSfr2)
 
         else:
@@ -1993,7 +1995,7 @@ class ModflowSfr2(Package):
         # Item 1
         if (
             isinstance(self.options, OptionBlock)
-            and self.parent.version == "mfnwt"
+            and ((self.parent.version == "mfnwt")|(self.parent.version == "mfowhm"))
         ):
             self.options.update_from_package(self)
             self.options.write_options(f_sfr)

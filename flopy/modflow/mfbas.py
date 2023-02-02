@@ -60,7 +60,9 @@ class ModflowBas(Package):
     heading : str
         Text string written to top of package input file.
     options : list of str
-        Can be either or a combination of XSECTION, CHTOCH or FREE.
+        Can be either or a combination of XSECTION, CHTOCH or FREE. With
+        OWHM there are many more possible but available are: 
+        NO_FAILED_CONVERGENCE_STOP, BUDGETDB
     ifrefm : bool
         Indicates whether or not packages will be written as free format.
 
@@ -333,8 +335,8 @@ class ModflowBas(Package):
             if line[0] != "#":
                 break
         # dataset 1 -- options
-        # only accept alphanumeric characters, as well as '+', '-' and '.'
-        line = re.sub(r"[^A-Z0-9\.\-\+]", " ", line.upper())
+        # only accept alphanumeric characters, as well as '+', '-' and '.' and '_'
+        line = re.sub(r"[^A-Z0-9\.\-\+\_]", " ", line.upper())
         opts = line.strip().split()
         ixsec = "XSECTION" in opts
         ichflg = "CHTOCH" in opts
@@ -346,6 +348,9 @@ class ModflowBas(Package):
             stoper = np.float32(opts[i + 1])
         else:
             stoper = None
+        # Options from OWHM
+        inoncnvrg = "NO_FAILED_CONVERGENCE_STOP" in opts 
+        ibdgt = "BUDGETDB" in opts
         # get nlay,nrow,ncol if not passed
         if nlay is None and nrow is None and ncol is None:
             nrow, ncol, nlay, nper = model.get_nrow_ncol_nlay_nper()
