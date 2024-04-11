@@ -4,7 +4,6 @@ import errno
 import inspect
 import os
 import sys
-from re import S
 
 import numpy as np
 
@@ -14,7 +13,14 @@ from ..utils import datautil
 from ..utils.check import mf6check
 from ..version import __version__
 from .coordinates import modeldimensions
-from .data import mfdata, mfdataarray, mfdatalist, mfdatascalar, mfstructure
+from .data import (
+    mfdata,
+    mfdataarray,
+    mfdatalist,
+    mfdataplist,
+    mfdatascalar,
+    mfstructure,
+)
 from .data.mfdatautil import DataSearchOutput, MFComment, cellids_equal
 from .data.mfstructure import DatumType, MFDataItemStructure, MFStructure
 from .mfbase import (
@@ -103,9 +109,9 @@ class MFBlockHeader:
                 "blk_post_comment",
             )
             if self.blk_trailing_comment_path not in simulation_data.mfdata:
-                simulation_data.mfdata[
-                    self.blk_trailing_comment_path
-                ] = MFComment("", "", simulation_data, 0)
+                simulation_data.mfdata[self.blk_trailing_comment_path] = (
+                    MFComment("", "", simulation_data, 0)
+                )
             if self.blk_post_comment_path not in simulation_data.mfdata:
                 simulation_data.mfdata[self.blk_post_comment_path] = MFComment(
                     "\n", "", simulation_data, 0
@@ -466,28 +472,57 @@ class MFBlock:
                 trans_array.set_data(data, key=0)
             return trans_array
         elif data_type == mfstructure.DataType.list:
-            return mfdatalist.MFList(
-                sim_data,
-                model_or_sim,
-                structure,
-                data,
-                enable,
-                path,
-                dimensions,
-                package,
-                self,
-            )
+            if (
+                structure.basic_item
+                and self._container_package.package_type.lower() != "nam"
+                and self._simulation_data.use_pandas
+            ):
+                return mfdataplist.MFPandasList(
+                    sim_data,
+                    model_or_sim,
+                    structure,
+                    data,
+                    enable,
+                    path,
+                    dimensions,
+                    package,
+                    self,
+                )
+            else:
+                return mfdatalist.MFList(
+                    sim_data,
+                    model_or_sim,
+                    structure,
+                    data,
+                    enable,
+                    path,
+                    dimensions,
+                    package,
+                    self,
+                )
         elif data_type == mfstructure.DataType.list_transient:
-            trans_list = mfdatalist.MFTransientList(
-                sim_data,
-                model_or_sim,
-                structure,
-                enable,
-                path,
-                dimensions,
-                package,
-                self,
-            )
+            if structure.basic_item and self._simulation_data.use_pandas:
+                trans_list = mfdataplist.MFPandasTransientList(
+                    sim_data,
+                    model_or_sim,
+                    structure,
+                    enable,
+                    path,
+                    dimensions,
+                    package,
+                    self,
+                )
+            else:
+                trans_list = mfdatalist.MFTransientList(
+                    sim_data,
+                    model_or_sim,
+                    structure,
+                    enable,
+                    path,
+                    dimensions,
+                    package,
+                    self,
+                )
             if data is not None:
                 trans_list.set_data(data, key=0, autofill=True)
             return trans_list
@@ -821,9 +856,9 @@ class MFBlock:
             aux_vars = self._container_package.auxiliary.get_data()
             if aux_vars is not None:
                 for var_name in list(aux_vars[0])[1:]:
-                    self.datasets_keyword[
-                        (var_name,)
-                    ] = self._container_package.aux.structure
+                    self.datasets_keyword[(var_name,)] = (
+                        self._container_package.aux.structure
+                    )
 
         comments = []
 
@@ -856,11 +891,6 @@ class MFBlock:
                             f'        opening external file "{file_name}"...'
                         )
                     external_file_info = arr_line
-                    file_name = datautil.clean_filename(arr_line[1])
-                    fd_block = open(os.path.join(root_path, file_name), "r")
-                    # read first line of external file
-                    line = fd_block.readline()
-                    arr_line = datautil.PyListUtil.split_data_line(line)
                 except:
                     type_, value_, traceback_ = sys.exc_info()
                     message = f'Error reading external file specified in line "{line}"'
@@ -1001,6 +1031,13 @@ class MFBlock:
                                 and result[1][:3].upper() == "END"
                             ):
                                 break
+        else:
+            # block empty, store empty array in block variables
+            empty_arr = []
+            for ds in self.datasets.values():
+                if isinstance(ds, mfdata.MFTransient):
+                    transient_key = block_header.get_transient_key()
+                    ds.set_data(empty_arr, transient_key)
         self.loaded = True
         self.is_valid()
 
@@ -1079,7 +1116,7 @@ class MFBlock:
             elif (
                 arr_line[0].lower() == "readasarrays"
                 and self.path[-1].lower() == "options"
-                and self._container_package.structure.read_as_arrays == False
+                and self._container_package.structure.read_as_arrays is False
             ):
                 error_msg = (
                     "ERROR: Attempting to read a ReadAsArrays "
@@ -1195,7 +1232,6 @@ class MFBlock:
                         )
 
                     return package_info_list
-                return None
         return None
 
     def _add_to_info_list(
@@ -1214,7 +1250,7 @@ class MFBlock:
 
     def _save_comments(self, arr_line, line, key, comments):
         # FIX: Save these comments somewhere in the data set
-        if not key in self.datasets_keyword:
+        if key not in self.datasets_keyword:
             if MFComment.is_comment(key, True):
                 if comments:
                     comments.append("\n")
@@ -1251,10 +1287,22 @@ class MFBlock:
             self._write_block(fd, self.block_headers[0], ext_file_action)
 
     def _add_missing_block_headers(self, repeating_dataset):
-        for key in repeating_dataset.get_active_key_list():
-            data = repeating_dataset.get_data(key)
-            if not self.header_exists(key[0]) and data is not None:
-                self._build_repeating_header([key[0]])
+        key_data_list = repeating_dataset.get_active_key_list()
+        # assemble a dictionary of data keys and empty keys
+        key_dict = {}
+        for key in key_data_list:
+            key_dict[key[0]] = True
+        for key, value in repeating_dataset.empty_keys.items():
+            if value:
+                key_dict[key] = True
+        for key in key_dict.keys():
+            has_data = repeating_dataset.has_data(key)
+            empty_key = (
+                key in repeating_dataset.empty_keys
+                and repeating_dataset.empty_keys[key]
+            )
+            if not self.header_exists(key) and (has_data or empty_key):
+                self._build_repeating_header([key])
 
     def header_exists(self, key, data_path=None):
         if not isinstance(key, list):
@@ -1273,7 +1321,11 @@ class MFBlock:
         return False
 
     def set_all_data_external(
-        self, base_name, check_data=True, external_data_folder=None
+        self,
+        base_name,
+        check_data=True,
+        external_data_folder=None,
+        binary=False,
     ):
         """Sets the block's list and array data to be stored externally,
         base_name is external file name's prefix, check_data determines
@@ -1287,18 +1339,31 @@ class MFBlock:
                 Whether to do data error checking.
             external_data_folder
                 Folder where external data will be stored
+            binary: bool
+                Whether file will be stored as binary
 
         """
         for key, dataset in self.datasets.items():
+            lst_data = isinstance(dataset, mfdatalist.MFList) or isinstance(
+                dataset, mfdataplist.MFPandasList
+            )
             if (
                 isinstance(dataset, mfdataarray.MFArray)
-                or (
-                    isinstance(dataset, mfdatalist.MFList)
-                    and dataset.structure.type == DatumType.recarray
-                )
+                or (lst_data and dataset.structure.type == DatumType.recarray)
                 and dataset.enabled
             ):
-                file_path = f"{base_name}_{dataset.structure.name}.txt"
+                if not binary or (
+                    lst_data
+                    and (
+                        dataset.data_dimensions.package_dim.boundnames()
+                        or not dataset.structure.basic_item
+                    )
+                ):
+                    ext = "txt"
+                    binary = False
+                else:
+                    ext = "bin"
+                file_path = f"{base_name}_{dataset.structure.name}.{ext}"
                 replace_existing_external = False
                 if external_data_folder is not None:
                     # get simulation root path
@@ -1323,6 +1388,7 @@ class MFBlock:
                     file_path,
                     replace_existing_external=replace_existing_external,
                     check_data=check_data,
+                    binary=binary,
                 )
 
     def set_all_data_internal(self, check_data=True):
@@ -1340,7 +1406,10 @@ class MFBlock:
             if (
                 isinstance(dataset, mfdataarray.MFArray)
                 or (
-                    isinstance(dataset, mfdatalist.MFList)
+                    (
+                        isinstance(dataset, mfdatalist.MFList)
+                        or isinstance(dataset, mfdataplist.MFPandasList)
+                    )
                     and dataset.structure.type == DatumType.recarray
                 )
                 and dataset.enabled
@@ -1354,8 +1423,37 @@ class MFBlock:
                 repeating_datasets.append(dataset)
         return repeating_datasets
 
+    def _prepare_external(self, fd, file_name, binary=False):
+        fd_main = fd
+        fd_path = self._simulation_data.mfpath.get_model_path(self.path[0])
+        # resolve full file and folder path
+        fd_file_path = os.path.join(fd_path, file_name)
+        fd_folder_path = os.path.split(fd_file_path)[0]
+        if fd_folder_path != "":
+            if not os.path.exists(fd_folder_path):
+                # create new external data folder
+                os.makedirs(fd_folder_path)
+        return fd_main, fd_file_path
+
     def _write_block(self, fd, block_header, ext_file_action):
         transient_key = None
+        basic_list = False
+        dataset_one = list(self.datasets.values())[0]
+        if isinstance(
+            dataset_one,
+            (mfdataplist.MFPandasList, mfdataplist.MFPandasTransientList),
+        ):
+            basic_list = True
+            for dataset in self.datasets.values():
+                assert isinstance(
+                    dataset,
+                    (
+                        mfdataplist.MFPandasList,
+                        mfdataplist.MFPandasTransientList,
+                    ),
+                )
+            # write block header
+            block_header.write_header(fd)
         if len(block_header.data_items) > 0:
             transient_key = block_header.get_transient_key()
 
@@ -1372,9 +1470,25 @@ class MFBlock:
                         print(
                             f"        writing data {dataset.structure.name}..."
                         )
-                    data_set_output.append(
-                        dataset.get_file_entry(ext_file_action=ext_file_action)
-                    )
+                    if basic_list:
+                        ext_fname = dataset.external_file_name()
+                        if ext_fname is not None:
+                            # if dataset.has_modified_ext_data():
+                            binary = dataset.binary_ext_data()
+                            # write block contents to external file
+                            fd_main, fd = self._prepare_external(
+                                fd, ext_fname, binary
+                            )
+                            dataset.write_file_entry(fd, fd_main=fd_main)
+                            fd = fd_main
+                        else:
+                            dataset.write_file_entry(fd)
+                    else:
+                        data_set_output.append(
+                            dataset.get_file_entry(
+                                ext_file_action=ext_file_action
+                            )
+                        )
                     data_found = True
                 else:
                     if (
@@ -1382,23 +1496,47 @@ class MFBlock:
                         >= VerbosityLevel.verbose.value
                     ):
                         print(
-                            "        writing data {} ({}).."
-                            ".".format(dataset.structure.name, transient_key)
-                        )
-                    if dataset.repeating:
-                        output = dataset.get_file_entry(
-                            transient_key, ext_file_action=ext_file_action
-                        )
-                        if output is not None:
-                            data_set_output.append(output)
-                            data_found = True
-                    else:
-                        data_set_output.append(
-                            dataset.get_file_entry(
-                                ext_file_action=ext_file_action
+                            "        writing data {} ({}).." ".".format(
+                                dataset.structure.name, transient_key
                             )
                         )
-                        data_found = True
+                    if basic_list:
+                        ext_fname = dataset.external_file_name(transient_key)
+                        if ext_fname is not None:
+                            # if dataset.has_modified_ext_data(transient_key):
+                            binary = dataset.binary_ext_data(transient_key)
+                            # write block contents to external file
+                            fd_main, fd = self._prepare_external(
+                                fd, ext_fname, binary
+                            )
+                            dataset.write_file_entry(
+                                fd,
+                                transient_key,
+                                ext_file_action=ext_file_action,
+                                fd_main=fd_main,
+                            )
+                            fd = fd_main
+                        else:
+                            dataset.write_file_entry(
+                                fd,
+                                transient_key,
+                                ext_file_action=ext_file_action,
+                            )
+                    else:
+                        if dataset.repeating:
+                            output = dataset.get_file_entry(
+                                transient_key, ext_file_action=ext_file_action
+                            )
+                            if output is not None:
+                                data_set_output.append(output)
+                                data_found = True
+                        else:
+                            data_set_output.append(
+                                dataset.get_file_entry(
+                                    ext_file_action=ext_file_action
+                                )
+                            )
+                    data_found = True
             except MFDataException as mfde:
                 raise MFDataException(
                     mfdata_except=mfde,
@@ -1412,46 +1550,30 @@ class MFBlock:
                 )
         if not data_found:
             return
-        # write block header
-        block_header.write_header(fd)
+        if not basic_list:
+            # write block header
+            block_header.write_header(fd)
 
-        if self.external_file_name is not None:
-            # write block contents to external file
-            indent_string = self._simulation_data.indent_string
-            fd.write(f"{indent_string}open/close {self.external_file_name}\n")
-            fd_main = fd
-            fd_path = os.path.split(os.path.realpath(fd.name))[0]
-            try:
-                fd = open(os.path.join(fd_path, self.external_file_name), "w")
-            except:
-                type_, value_, traceback_ = sys.exc_info()
-                message = (
-                    f'Error reading external file "{self.external_file_name}"'
+            if self.external_file_name is not None:
+                indent_string = self._simulation_data.indent_string
+                fd.write(
+                    f"{indent_string}open/close "
+                    f'"{self.external_file_name}"\n'
                 )
-                raise MFDataException(
-                    self._container_package.model_name,
-                    self._container_package._get_pname(),
-                    self.path,
-                    "reading external file",
-                    self.structure.name,
-                    inspect.stack()[0][3],
-                    type_,
-                    value_,
-                    traceback_,
-                    message,
-                    self._simulation_data.debug,
+                # write block contents to external file
+                fd_main, fd = self._prepare_external(
+                    fd, self.external_file_name
                 )
-
-        # write data sets
-        for output in data_set_output:
-            fd.write(output)
+            # write data sets
+            for output in data_set_output:
+                fd.write(output)
 
         # write trailing comments
         pth = block_header.blk_trailing_comment_path
         if pth in self._simulation_data.mfdata:
             self._simulation_data.mfdata[pth].write(fd)
 
-        if self.external_file_name is not None:
+        if self.external_file_name is not None and not basic_list:
             # switch back writing to package file
             fd.close()
             fd = fd_main
@@ -1553,8 +1675,8 @@ class MFPackage(PackageContainer, PackageInterface):
         The parent model, simulation, or package containing this package
     package_type : str
         String defining the package type
-    filename : str
-        Filename of file where this package is stored
+    filename : str or PathLike
+        Name or path of file where this package is stored
     quoted_filename : str
         Filename with quotes around it when there is a space in the name
     pname : str
@@ -1677,11 +1799,9 @@ class MFPackage(PackageContainer, PackageInterface):
                 self._filename = f"{base_name}.{package_type}"
             else:
                 # filename uses model base name
-                self._filename = MFFileMgmt.string_to_file_path(
-                    f"{self.model_or_sim.name}.{package_type}"
-                )
+                self._filename = f"{self.model_or_sim.name}.{package_type}"
         else:
-            if not isinstance(filename, str):
+            if not isinstance(filename, (str, os.PathLike)):
                 message = (
                     "Invalid fname parameter. Expecting type str. "
                     'Instead type "{}" was '
@@ -1701,8 +1821,8 @@ class MFPackage(PackageContainer, PackageInterface):
                     message,
                     self.model_or_sim.simulation_data.debug,
                 )
-            self._filename = MFFileMgmt.string_to_file_path(
-                datautil.clean_filename(filename)
+            self._filename = datautil.clean_filename(
+                str(filename).replace("\\", "/")
             )
         self.path, self.structure = self.model_or_sim.register_package(
             self, not loading_package, pname is None, filename is None
@@ -1734,7 +1854,7 @@ class MFPackage(PackageContainer, PackageInterface):
         ):
             # initialize as part of the parent's child package group
             chld_pkg_grp = self.parent_file._child_package_groups[package_type]
-            chld_pkg_grp.init_package(self, self._filename)
+            chld_pkg_grp.init_package(self, self._filename, False)
 
         # remove any remaining valid kwargs
         key_list = list(kwargs.keys())
@@ -1884,7 +2004,11 @@ class MFPackage(PackageContainer, PackageInterface):
     def _get_aux_data(self, aux_names):
         if hasattr(self, "stress_period_data"):
             spd = self.stress_period_data.get_data()
-            if 0 in spd and aux_names[0][1] in spd[0].dtype.names:
+            if (
+                0 in spd
+                and spd[0] is not None
+                and aux_names[0][1] in spd[0].dtype.names
+            ):
                 return spd
         if hasattr(self, "packagedata"):
             pd = self.packagedata.get_data()
@@ -1892,7 +2016,11 @@ class MFPackage(PackageContainer, PackageInterface):
                 return pd
         if hasattr(self, "perioddata"):
             spd = self.perioddata.get_data()
-            if 0 in spd and aux_names[0][1] in spd[0].dtype.names:
+            if (
+                0 in spd
+                and spd[0] is not None
+                and aux_names[0][1] in spd[0].dtype.names
+            ):
                 return spd
         if hasattr(self, "aux"):
             return self.aux.get_data()
@@ -1962,10 +2090,12 @@ class MFPackage(PackageContainer, PackageInterface):
                                 for row in data:
                                     row_size = len(row)
                                     aux_start_loc = (
-                                        row_size - num_aux_names - offset
+                                        row_size - num_aux_names - offset - 1
                                     )
                                     # loop through auxiliary variables
-                                    for idx, var in enumerate(aux_names):
+                                    for idx, var in enumerate(
+                                        list(aux_names[0])[1:]
+                                    ):
                                         # get index of current aux variable
                                         data_index = aux_start_loc + idx
                                         # verify auxiliary value is either
@@ -1974,8 +2104,8 @@ class MFPackage(PackageContainer, PackageInterface):
                                             not datautil.DatumUtil.is_float(
                                                 row[data_index]
                                             )
-                                            and not row[data_index]
-                                            in time_series_name_dict
+                                            and row[data_index]
+                                            not in time_series_name_dict
                                         ):
                                             desc = (
                                                 f"Invalid non-numeric "
@@ -1998,8 +2128,8 @@ class MFPackage(PackageContainer, PackageInterface):
                                 val = np.isnan(np.sum(data))
                                 if val:
                                     desc = (
-                                        f"One or more nan values were "
-                                        f"found in auxiliary data."
+                                        "One or more nan values were "
+                                        "found in auxiliary data."
                                     )
                                     chk._add_to_summary(
                                         "Warning",
@@ -2043,8 +2173,7 @@ class MFPackage(PackageContainer, PackageInterface):
                     bl_repr = repr(block)
                     if len(bl_repr.strip()) > 0:
                         data_str = (
-                            "{}Block {}\n--------------------\n{}"
-                            "\n".format(
+                            "{}Block {}\n--------------------\n{}" "\n".format(
                                 data_str, block.structure.name, repr(block)
                             )
                         )
@@ -2052,8 +2181,7 @@ class MFPackage(PackageContainer, PackageInterface):
                     bl_str = str(block)
                     if len(bl_str.strip()) > 0:
                         data_str = (
-                            "{}Block {}\n--------------------\n{}"
-                            "\n".format(
+                            "{}Block {}\n--------------------\n{}" "\n".format(
                                 data_str, block.structure.name, str(block)
                             )
                         )
@@ -2168,7 +2296,7 @@ class MFPackage(PackageContainer, PackageInterface):
                                 new_size = len(dataset.get_data())
 
                         if size_def.get_data() is None:
-                            current_size = 0
+                            current_size = -1
                         else:
                             current_size = size_def.get_data()
 
@@ -2580,7 +2708,11 @@ class MFPackage(PackageContainer, PackageInterface):
             package.set_model_relative_path(model_ws)
 
     def set_all_data_external(
-        self, check_data=True, external_data_folder=None
+        self,
+        check_data=True,
+        external_data_folder=None,
+        base_name=None,
+        binary=False,
     ):
         """Sets the package's list and array data to be stored externally.
 
@@ -2590,16 +2722,30 @@ class MFPackage(PackageContainer, PackageInterface):
                 Determine if data error checking is enabled
             external_data_folder
                 Folder where external data will be stored
+            base_name: str
+                Base file name prefix for all files
+            binary: bool
+                Whether file will be stored as binary
         """
         # set blocks
         for key, block in self.blocks.items():
             file_name = os.path.split(self.filename)[1]
+            if base_name is not None:
+                file_name = f"{base_name}_{file_name}"
             block.set_all_data_external(
-                file_name, check_data, external_data_folder
+                file_name,
+                check_data,
+                external_data_folder,
+                binary,
             )
         # set sub-packages
         for package in self._packagelist:
-            package.set_all_data_external(check_data, external_data_folder)
+            package.set_all_data_external(
+                check_data,
+                external_data_folder,
+                base_name,
+                binary,
+            )
 
     def set_all_data_internal(self, check_data=True):
         """Sets the package's list and array data to be stored internally.
@@ -2698,9 +2844,9 @@ class MFPackage(PackageContainer, PackageInterface):
 
     def _load_blocks(self, fd_input_file, strict=True, max_blocks=sys.maxsize):
         # init
-        self._simulation_data.mfdata[
-            self.path + ("pkg_hdr_comments",)
-        ] = MFComment("", self.path, self._simulation_data)
+        self._simulation_data.mfdata[self.path + ("pkg_hdr_comments",)] = (
+            MFComment("", self.path, self._simulation_data)
+        )
         self.post_block_comments = MFComment(
             "", self.path, self._simulation_data
         )
@@ -2837,7 +2983,7 @@ class MFPackage(PackageContainer, PackageInterface):
                             block_header_info, fd_input_file, strict
                         )
 
-                        # write post block comment comment
+                        # write post block comment
                         self._simulation_data.mfdata[
                             cur_block.block_headers[-1].blk_post_comment_path
                         ] = self.post_block_comments
@@ -3251,15 +3397,26 @@ class MFChildPackages:
             suffix += 1
         return possible_path
 
-    def init_package(self, package, fname):
-        # clear out existing packages
-        self._remove_packages()
+    def init_package(self, package, fname, remove_packages=True):
+        if remove_packages:
+            # clear out existing packages
+            self._remove_packages()
+        elif fname is not None:
+            self._remove_packages(fname)
         if fname is None:
             # build a file name
             fname = self._next_default_file_path()
             package._filename = fname
-        # set file record variable
-        self._filerecord.set_data(fname, autofill=True)
+        # check file record variable
+        found = False
+        fr_data = self._filerecord.get_data()
+        if fr_data is not None:
+            for line in fr_data:
+                if line[0] == fname:
+                    found = True
+        if not found:
+            # append file record variable
+            self._filerecord.append_data([(fname,)])
         # add the package to the list
         self._packages.append(package)
 
@@ -3306,7 +3463,11 @@ class MFChildPackages:
         # add the package to the list
         self._packages.append(package)
 
-    def _remove_packages(self):
-        for package in self._packages:
-            self._model_or_sim.remove_package(package)
-        self._packages = []
+    def _remove_packages(self, fname=None):
+        rp_list = []
+        for idx, package in enumerate(self._packages):
+            if fname is None or package.filename == fname:
+                self._model_or_sim.remove_package(package)
+                rp_list.append(idx)
+        for idx in reversed(rp_list):
+            self._packages.pop(idx)

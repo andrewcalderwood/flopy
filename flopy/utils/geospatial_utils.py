@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 import numpy as np
 
 from ..utils import import_optional_dependency
@@ -238,7 +241,8 @@ class GeoSpatialCollection:
     obj : collection object
         obj can accept the following types
 
-        str : shapefile name
+        str : shapefile path
+        PathLike : shapefile path
         shapefile.Reader object
         list of [shapefile.Shape, shapefile.Shape,]
         shapefile.Shapes object
@@ -256,10 +260,11 @@ class GeoSpatialCollection:
     """
 
     def __init__(self, obj, shapetype=None):
-
         self.__shapefile = import_optional_dependency(
             "shapefile", errors="silent"
         )
+        gpd = import_optional_dependency("geopandas", errors="silent")
+
         shapely_geo = import_optional_dependency(
             "shapely.geometry", errors="silent"
         )
@@ -272,6 +277,7 @@ class GeoSpatialCollection:
         self._flopy_geometry = None
         self._points = None
         self.__shapetype = None
+        self.__attributes = None
 
         if isinstance(obj, Collection):
             for shape in obj:
@@ -316,8 +322,10 @@ class GeoSpatialCollection:
                     )
 
         elif self.__shapefile is not None:
-            if isinstance(obj, str):
-                with self.__shapefile.Reader(obj) as r:
+            if isinstance(obj, (str, os.PathLike)):
+                with self.__shapefile.Reader(
+                    str(Path(obj).expanduser().absolute())
+                ) as r:
                     for shape in r.shapes():
                         self.__collection.append(GeoSpatialUtil(shape))
 
@@ -354,6 +362,24 @@ class GeoSpatialCollection:
                 ),
             ):
                 for geom in obj.geoms:
+                    self.__collection.append(GeoSpatialUtil(geom))
+
+        if gpd is not None:
+            if isinstance(obj, gpd.GeoDataFrame):
+                self.__attributes = {}
+                for geom in obj.geometry.values:
+                    self.__collection.append(GeoSpatialUtil(geom))
+
+                for k in list(obj):
+                    if k != "geometry":
+                        self.__attributes[k] = obj[k].values
+
+            elif isinstance(obj, gpd.GeoSeries):
+                for geom in obj.values:
+                    self.__collection.append(GeoSpatialUtil(geom))
+
+            elif isinstance(obj, gpd.array.GeometryArray):
+                for geom in obj:
                     self.__collection.append(GeoSpatialUtil(geom))
 
         if not self.__collection:
@@ -413,6 +439,23 @@ class GeoSpatialCollection:
             [i.shapely for i in self.__collection]
         )
         return self._shapely
+
+    @property
+    def geo_dataframe(self):
+        """
+        Property that returns a geopandas DataFrame
+
+        Returns
+        -------
+            geopandas.GeoDataFrame
+        """
+        gpd = import_optional_dependency("geopandas")
+        data = {"geometry": self.shapely.geoms}
+        if self.__attributes is not None:
+            for k, v in self.__attributes.items():
+                data[k] = v
+        gdf = gpd.GeoDataFrame(data)
+        return gdf
 
     @property
     def geojson(self):

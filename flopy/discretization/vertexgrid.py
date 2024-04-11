@@ -1,5 +1,4 @@
 import copy
-import inspect
 import os
 
 import numpy as np
@@ -19,6 +18,40 @@ class VertexGrid(Grid):
         list of vertices that make up the grid
     cell2d
         list of cells and their vertices
+    top : list or ndarray
+        top elevations for all cells in the grid.
+    botm : list or ndarray
+        bottom elevations for all cells in the grid.
+    idomain : int or ndarray
+        ibound/idomain value for each cell
+    lenuni : int or ndarray
+        model length units
+    crs : pyproj.CRS, int, str, optional if `prjfile` is specified
+        Coordinate reference system (CRS) for the model grid
+        (must be projected; geographic CRS are not supported).
+        The value can be anything accepted by
+        :meth:`pyproj.CRS.from_user_input() <pyproj.crs.CRS.from_user_input>`,
+        such as an authority string (eg "EPSG:26916") or a WKT string.
+    prjfile : str or pathlike, optional if `crs` is specified
+        ESRI-style projection file with well-known text defining the CRS
+        for the model grid (must be projected; geographic CRS are not supported).
+    xoff : float
+        x coordinate of the origin point (lower left corner of model grid)
+        in the spatial reference coordinate system
+    yoff : float
+        y coordinate of the origin point (lower left corner of model grid)
+        in the spatial reference coordinate system
+    angrot : float
+        rotation angle of model grid, as it is rotated around the origin point
+    **kwargs : dict, optional
+        Support deprecated keyword options.
+
+        .. deprecated:: 3.5
+           The following keyword options will be removed for FloPy 3.6:
+
+             - ``prj`` (str or pathlike): use ``prjfile`` instead.
+             - ``epsg`` (int): use ``crs`` instead.
+             - ``proj4`` (str): use ``crs`` instead.
 
     Properties
     ----------
@@ -42,35 +75,32 @@ class VertexGrid(Grid):
         botm=None,
         idomain=None,
         lenuni=None,
-        epsg=None,
-        proj4=None,
-        prj=None,
+        crs=None,
+        prjfile=None,
         xoff=0.0,
         yoff=0.0,
         angrot=0.0,
         nlay=None,
         ncpl=None,
         cell1d=None,
+        **kwargs,
     ):
         super().__init__(
             "vertex",
-            top,
-            botm,
-            idomain,
-            lenuni,
-            epsg,
-            proj4,
-            prj,
-            xoff,
-            yoff,
-            angrot,
+            top=top,
+            botm=botm,
+            idomain=idomain,
+            lenuni=lenuni,
+            crs=crs,
+            prjfile=prjfile,
+            xoff=xoff,
+            yoff=yoff,
+            angrot=angrot,
+            **kwargs,
         )
         self._vertices = vertices
         self._cell1d = cell1d
         self._cell2d = cell2d
-        self._top = top
-        self._botm = botm
-        self._idomain = idomain
         if botm is None:
             self._nlay = nlay
             self._ncpl = ncpl
@@ -259,6 +289,53 @@ class VertexGrid(Grid):
 
         return copy.copy(self._polygons)
 
+    @property
+    def geo_dataframe(self):
+        """
+        Returns a geopandas GeoDataFrame of the model grid
+
+        Returns
+        -------
+            GeoDataFrame
+        """
+        polys = [[self.get_cell_vertices(nn)] for nn in range(self.ncpl)]
+        gdf = super().geo_dataframe(polys)
+        return gdf
+
+    def convert_grid(self, factor):
+        """
+        Method to scale the model grid based on user supplied scale factors
+
+        Parameters
+        ----------
+        factor
+
+        Returns
+        -------
+            Grid object
+        """
+        if self.is_complete:
+            return VertexGrid(
+                vertices=[
+                    [i[0], i[1] * factor, i[2] * factor]
+                    for i in self._vertices
+                ],
+                cell2d=[
+                    [i[0], i[1] * factor, i[2] * factor] + i[3:]
+                    for i in self._cell2d
+                ],
+                top=self.top * factor,
+                botm=self.botm * factor,
+                idomain=self.idomain,
+                xoff=self.xoffset * factor,
+                yoff=self.yoffset * factor,
+                angrot=self.angrot,
+            )
+        else:
+            raise AssertionError(
+                "Grid is not complete and cannot be converted"
+            )
+
     def intersect(self, x, y, z=None, local=False, forgive=False):
         """
         Get the CELL2D number of a point with coordinates x and y
@@ -287,10 +364,6 @@ class VertexGrid(Grid):
             The CELL2D number
 
         """
-        if isinstance(z, bool):
-            frame_info = inspect.getframeinfo(inspect.currentframe())
-            self._warn_intersect(frame_info.filename, frame_info.lineno)
-
         if local:
             # transform x and y to real-world coordinates
             x, y = super().get_coords(x, y)
@@ -502,7 +575,7 @@ class VertexGrid(Grid):
                 a = np.squeeze(a, axis=1)
                 plotarray = a[layer, :]
             else:
-                raise Exception(
+                raise ValueError(
                     "Array has 3 dimensions so one of them must be of size 1 "
                     "for a VertexGrid."
                 )
@@ -514,7 +587,7 @@ class VertexGrid(Grid):
                 plotarray = plotarray.reshape(self.nlay, self.ncpl)
                 plotarray = plotarray[layer, :]
         else:
-            raise Exception("Array to plot must be of dimension 1 or 2")
+            raise ValueError("Array to plot must be of dimension 1 or 2")
         msg = f"{plotarray.shape[0]} /= {required_shape}"
         assert plotarray.shape == required_shape, msg
         return plotarray

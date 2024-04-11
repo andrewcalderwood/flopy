@@ -12,6 +12,7 @@
 #
 import os
 import sys
+from pathlib import Path
 
 import yaml
 
@@ -22,15 +23,8 @@ from flopy import __author__, __version__
 # -- determine if running on readthedocs ------------------------------------
 on_rtd = os.environ.get("READTHEDOCS") == "True"
 
-# -- determine if this version is a release candidate
-with open("../README.md", "r") as f:
-    lines = f.readlines()
-rc_text = ""
-for line in lines:
-    if line.startswith("### Version"):
-        if "release candidate" in line:
-            rc_text = "release candidate"
-        break
+# -- determine if this is a development or release version ------------------
+branch_or_version = __version__ if "dev" not in __version__ else "develop"
 
 # -- get authors
 with open("../CITATION.cff") as f:
@@ -38,20 +32,18 @@ with open("../CITATION.cff") as f:
 
 # -- update version number in main.rst
 rst_name = "main.rst"
-with open(rst_name, "r") as f:
+with open(rst_name) as f:
     lines = f.readlines()
 with open(rst_name, "w") as f:
     for line in lines:
         if line.startswith("**Documentation for version"):
             line = f"**Documentation for version {__version__}"
-            if rc_text != "":
-                line += f" --- {rc_text}"
             line += "**\n"
         f.write(line)
 
 # -- update authors in introduction.rst
 rst_name = "introduction.rst"
-with open(rst_name, "r") as f:
+with open(rst_name) as f:
     lines = f.readlines()
 tag_start = "FloPy Development Team"
 tag_end = "How to Cite"
@@ -100,15 +92,21 @@ cmd = ("python", "create_rstfiles.py")
 print(" ".join(cmd))
 os.system(" ".join(cmd))
 
-# -- convert the tutorial scripts -------------------------------------------
+# -- convert tutorial scripts and run example notebooks ----------------------
 if not on_rtd:
-    cmd = ("python", "create_tutorials.py")
-    print(" ".join(cmd))
-    os.system(" ".join(cmd))
+    nbs_py = Path("Notebooks").glob("*.py")
+    for py in nbs_py:
+        ipynb = py.with_suffix(".ipynb")
+        if ipynb.exists():
+            print(f"{ipynb} already exists, skipping")
+            continue
+        cmd = ("jupytext", "--to", "ipynb", "--execute", str(py))
+        print(" ".join(cmd))
+        os.system(" ".join(cmd))
 
 # -- Project information -----------------------------------------------------
-project = "FloPy Documentation"
-copyright = f"2022, {__author__}"
+project = "FloPy"
+copyright = f"2024, {__author__}"
 author = __author__
 
 # The version.
@@ -135,15 +133,18 @@ extensions = [
     "IPython.sphinxext.ipython_console_highlighting",  # lowercase didn't work
     "sphinx.ext.autosectionlabel",
     "nbsphinx",
-    "nbsphinx_link",
-    "recommonmark",
+    "myst_parser",
 ]
 
 # Settings for GitHub actions integration
 if on_rtd:
     extensions.append("rtds_action")
     rtds_action_github_repo = "modflowpy/flopy"
-    rtds_action_path = "_notebooks"
+    # This will overwrite the .docs/Notebooks directory
+    # with the notebooks downloaded & extracted from CI
+    # artifacts, which is fine. We want to render those
+    # with output, not clean ones from version control.
+    rtds_action_path = "Notebooks"
     rtds_action_artifact_prefix = "notebooks-for-"
     rtds_action_github_token = os.environ.get("GITHUB_TOKEN", None)
 
@@ -154,7 +155,7 @@ templates_path = ["_templates"]
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "**.ipynb_checkpoints"]
-source_suffix = ".rst"
+source_suffix = {".rst": "restructuredtext", ".md": "markdown"}
 
 # The encoding of source files.
 source_encoding = "utf-8"
@@ -212,13 +213,9 @@ html_context = {
     "doc_path": "doc",
 }
 
-html_css_files = [
-    "css/custom.css",
-]
-
 # A shorter title for the navigation bar.  Default is the same as html_title.
 html_short_title = "flopy"
-html_favicon = "_images/flopylogo.png"
+html_favicon = "_images/flopylogo_sm.png"
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
@@ -249,3 +246,52 @@ html_show_copyright = False
 
 # Output file base name for HTML help builder.
 htmlhelp_basename = "flopydoc"
+
+# Example configuration for intersphinx: refer to the Python standard library.
+intersphinx_mapping = {
+    "python": ("https://docs.python.org/3/", None),
+    "numpy": ("https://docs.scipy.org/doc/numpy/", None),
+    "scipy": ("https://docs.scipy.org/doc/scipy/reference/", None),
+    "pandas": ("https://pandas.pydata.org/pandas-docs/stable", None),
+    "matplotlib": ("https://matplotlib.org", None),
+    "pyproj": ("https://pyproj4.github.io/pyproj/stable/", None),
+}
+
+# disable automatic notebook execution (nbs are built in CI for now)
+nbsphinx_execute = "never"
+
+nbsphinx_prolog = (
+    r"""
+{% set docname = env.doc2path(env.docname, base=None) %}
+
+.. raw:: html
+
+    <div class="admonition note">
+      This page was generated from
+      <a class="reference external" href="https://github.com/modflowpy/flopy/blob/"""
+    + branch_or_version
+    + r"""/.docs/Notebooks/{{ env.docname.split('/')|last|e + '.py' }}">{{ env.docname.split('/')|last|e + '.py' }}</a>.
+      It's also available as a <a href="{{ env.docname.split('/')|last|e + '.ipynb' }}" class="reference download internal" download>notebook</a>.
+      <script>
+        if (document.location.host) {
+          let nbviewer_link = document.createElement('a');
+          nbviewer_link.setAttribute('href',
+            'https://nbviewer.org/url' +
+            (window.location.protocol == 'https:' ? 's/' : '/') +
+            window.location.host +
+            window.location.pathname.slice(0, -4) +
+            'ipynb');
+          nbviewer_link.innerHTML = 'View in <em>nbviewer</em>';
+          nbviewer_link.innerHTML = 'Or view it on <em>nbviewer</em>';
+          nbviewer_link.classList.add('reference');
+          nbviewer_link.classList.add('external');
+          document.currentScript.replaceWith(nbviewer_link, '.');
+        }
+      </script>
+    </div>
+"""
+)
+
+# Import Matplotlib to avoid this message in notebooks:
+# "Matplotlib is building the font cache; this may take a moment."
+import matplotlib.pyplot

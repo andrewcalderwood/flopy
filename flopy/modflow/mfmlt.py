@@ -7,6 +7,7 @@ MODFLOW Guide
 <https://water.usgs.gov/ogw/modflow-nwt/MODFLOW-NWT-Guide/mult.html>`_.
 
 """
+
 import numpy as np
 
 from ..pakbase import Package
@@ -63,7 +64,6 @@ class ModflowMlt(Package):
         unitnumber=None,
         filenames=None,
     ):
-
         # set default unit number of one is not specified
         if unitnumber is None:
             unitnumber = ModflowMlt._defaultunit()

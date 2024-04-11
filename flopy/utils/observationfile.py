@@ -1,6 +1,7 @@
 import io
 
 import numpy as np
+import pandas as pd
 
 from ..utils import import_optional_dependency
 from ..utils.flopy_io import get_ts_sp
@@ -179,11 +180,6 @@ class ObsFiles(FlopyBinaryData):
 
         from ..utils.utils_def import totim_to_datetime
 
-        pd = import_optional_dependency(
-            "pandas",
-            error_message="ObsFiles.get_dataframe() requires pandas.",
-        )
-
         i0 = 0
         i1 = self.data.shape[0]
         if totim is not None:
@@ -219,7 +215,6 @@ class ObsFiles(FlopyBinaryData):
         return df
 
     def _read_data(self):
-
         if self.data is not None:
             return
 
@@ -508,8 +503,7 @@ class CsvFile:
     def __init__(
         self, csvfile, delimiter=",", deletechars="", replace_space=""
     ):
-
-        with open(csvfile, "r") as self.file:
+        with open(csvfile) as self.file:
             self.delimiter = delimiter
             self.deletechars = deletechars
             self.replace_space = replace_space
@@ -517,12 +511,32 @@ class CsvFile:
             # read header line
             line = self.file.readline()
             self._header = line.rstrip().split(delimiter)
+            self.__fix_duplicate_headings()
             self.floattype = "f8"
             self.dtype = _build_dtype(self._header, self.floattype)
 
             self.data = self.read_csv(
                 self.file, self.dtype, delimiter, deletechars, replace_space
             )
+
+    def __fix_duplicate_headings(self):
+        """
+        Method to increment duplicate observation names if they exist
+
+        """
+        new_header = []
+        while self._header:
+            colname = self._header.pop(0)
+            cnt = 1
+            if colname in new_header:
+                cnt = 1
+                basename = colname
+                while colname in new_header:
+                    colname = f"{basename}_{cnt}"
+                    cnt += 1
+            new_header.append(colname)
+
+        self._header = new_header
 
     @property
     def obsnames(self):

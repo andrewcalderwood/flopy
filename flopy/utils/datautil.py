@@ -54,24 +54,32 @@ def max_tuple_abs_size(some_tuple):
 
 class DatumUtil:
     @staticmethod
-    def is_int(str):
-        try:
-            int(str)
-            return True
-        except TypeError:
-            return False
-        except ValueError:
-            return False
+    def is_int(v):
+        if isinstance(v, np.ndarray):
+            try:
+                int(v.item())
+            except ValueError:
+                return False
+        else:
+            try:
+                int(v)
+                return True
+            except (TypeError, ValueError):
+                return False
 
     @staticmethod
-    def is_float(str):
-        try:
-            float(str)
-            return True
-        except TypeError:
-            return False
-        except ValueError:
-            return False
+    def is_float(v):
+        if isinstance(v, np.ndarray):
+            try:
+                float(v.item())
+            except ValueError:
+                return False
+        else:
+            try:
+                float(v)
+                return True
+            except (TypeError, ValueError):
+                return False
 
     @staticmethod
     def is_basic_type(obj):
@@ -82,6 +90,26 @@ class DatumUtil:
         ):
             return True
         return False
+
+    @staticmethod
+    def cellid_model_num(data_item_name, model_data, model_dim):
+        # determine which model to use based on cellid name
+        # contains hard coded relationship between data item names and
+        # model number
+        # TODO: Incorporate this into the DFNs
+        if model_data:
+            return None
+        if data_item_name.startswith("cellidm") and len(data_item_name) > 7:
+            model_num = data_item_name[7:]
+            if DatumUtil.is_int(model_num):
+                return int(model_num) - 1
+        if (
+            data_item_name == "cellidn" or data_item_name == "cellidsj"
+        ) and len(model_dim) > 0:
+            return 0
+        elif data_item_name == "cellidm" and len(model_dim) > 1:
+            return 1
+        return None
 
 
 class PyListUtil:
@@ -340,13 +368,24 @@ class PyListUtil:
                         max_split_type = delimiter
                         max_split_list = alt_split
 
-            if max_split_type is not None:
+            if max_split_type is None and max_split_size > 0:
+                split_first = max_split_list[0].strip().split(",")
+                if len(split_first) > 1:
+                    max_split_list = split_first + max_split_list[1:]
+                    max_split_size = len(max_split_list)
+                    max_split_type = "combo"
+
+            if max_split_type is not None and max_split_size > 1:
                 clean_line = max_split_list
                 if PyListUtil.line_num == 0:
                     PyListUtil.delimiter_used = max_split_type
-                elif PyListUtil.delimiter_used != max_split_type:
+                elif (
+                    PyListUtil.delimiter_used != max_split_type
+                    or max_split_type == "combo"
+                ):
                     PyListUtil.consistent_delim = False
-            PyListUtil.line_num += 1
+            if max_split_size > 1:
+                PyListUtil.line_num += 1
 
         arr_fixed_line = []
         index = 0

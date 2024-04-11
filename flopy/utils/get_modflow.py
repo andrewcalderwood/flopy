@@ -7,8 +7,10 @@ It requires Python 3.6 or later, and has no dependencies.
 
 See https://developer.github.com/v3/repos/releases/ for GitHub Releases API.
 """
+
 import json
 import os
+import shutil
 import sys
 import tempfile
 import urllib
@@ -17,13 +19,15 @@ import warnings
 import zipfile
 from importlib.util import find_spec
 from pathlib import Path
+from platform import processor
 
 __all__ = ["run_main"]
 __license__ = "CC0"
 
 from typing import Dict, List, Tuple
 
-owner = "MODFLOW-USGS"
+default_owner = "MODFLOW-USGS"
+default_repo = "executables"
 # key is the repo name, value is the renamed file prefix for the download
 renamed_prefix = {
     "modflow6": "modflow6",
@@ -31,7 +35,7 @@ renamed_prefix = {
     "modflow6-nightly-build": "modflow6_nightly",
 }
 available_repos = list(renamed_prefix.keys())
-available_ostags = ["linux", "mac", "win32", "win64"]
+available_ostags = ["linux", "mac", "macarm", "win32", "win64", "win64par"]
 max_http_tries = 3
 
 # Check if this is running from flopy
@@ -63,11 +67,11 @@ def get_ostag() -> str:
 
 
 def get_suffixes(ostag) -> Tuple[str, str]:
-    if ostag in ["win32", "win64"]:
+    if ostag in ["win32", "win64", "win64par"]:
         return ".exe", ".dll"
     elif ostag == "linux":
         return "", ".so"
-    elif ostag == "mac":
+    elif "mac" in ostag:
         return "", ".dylib"
     else:
         raise KeyError(
@@ -92,8 +96,12 @@ def get_request(url, params={}):
     return urllib.request.Request(url, headers=headers)
 
 
-def get_releases(repo, quiet=False, per_page=None) -> List[str]:
+def get_releases(
+    owner=None, repo=None, quiet=False, per_page=None
+) -> List[str]:
     """Get list of available releases."""
+    owner = default_owner if owner is None else owner
+    repo = default_repo if repo is None else repo
     req_url = f"https://api.github.com/repos/{owner}/{repo}/releases"
 
     params = {}
@@ -132,8 +140,10 @@ def get_releases(repo, quiet=False, per_page=None) -> List[str]:
     return avail_releases
 
 
-def get_release(repo, tag="latest", quiet=False) -> dict:
+def get_release(owner=None, repo=None, tag="latest", quiet=False) -> dict:
     """Get info about a particular release."""
+    owner = default_owner if owner is None else owner
+    repo = default_repo if repo is None else repo
     api_url = f"https://api.github.com/repos/{owner}/{repo}"
     req_url = (
         f"{api_url}/releases/latest"
@@ -165,7 +175,7 @@ def get_release(repo, tag="latest", quiet=False) -> dict:
                 ) from err
             elif err.code == 404:
                 if releases is None:
-                    releases = get_releases(repo, quiet)
+                    releases = get_releases(owner, repo, quiet)
                 if tag not in releases:
                     raise ValueError(
                         f"Release {tag} not found (choose from {', '.join(releases)})"
@@ -252,7 +262,7 @@ def select_bindir(bindir, previous=None, quiet=False, is_cli=False) -> Path:
                 f"invalid option '{bindir}', choose from: {opt_avail}"
             )
         if not quiet:
-            print(f"auto-selecting option {sel[0]!r} for '{bindir}'")
+            print(f"auto-selecting option {sel[0]!r} for 'bindir'")
         return Path(options[sel[0]][0]).resolve()
     else:
         if not is_cli:
@@ -286,7 +296,8 @@ def select_bindir(bindir, previous=None, quiet=False, is_cli=False) -> Path:
 
 def run_main(
     bindir,
-    repo="executables",
+    owner=default_owner,
+    repo=default_repo,
     release_id="latest",
     ostag=None,
     subset=None,
@@ -303,6 +314,8 @@ def run_main(
         Writable path to extract executables. Auto-select options start with a
         colon character. See error message or other documentation for further
         information on auto-select options.
+    owner : str, default "MODFLOW-USGS"
+        Name of GitHub repository owner (user or organization).
     repo : str, default "executables"
         Name of GitHub repository. Choose one of "executables" (default),
         "modflow6", or "modflow6-nightly-build".
@@ -370,7 +383,7 @@ def run_main(
             bindir, previous=prev_bindir, quiet=quiet, is_cli=_is_cli
         )
     elif not isinstance(bindir, (str, Path)):
-        raise ValueError(f"Invalid bindir option (expected string or Path)")
+        raise ValueError("Invalid bindir option (expected string or Path)")
     bindir = Path(bindir).resolve()
 
     # make sure bindir exists
@@ -392,26 +405,30 @@ def run_main(
         )
 
     # get the selected release
-    release = get_release(repo, release_id, quiet)
+    release = get_release(owner, repo, release_id, quiet)
     assets = release.get("assets", [])
-
-    # Windows 64-bit asset in modflow6 repo release has no OS tag
-    if repo == "modflow6" and ostag == "win64":
-        asset = list(sorted(assets, key=lambda a: len(a["name"])))[0]
+    asset_names = [a["name"] for a in assets]
+    for asset in assets:
+        asset_name = asset["name"]
+        if ostag in asset_name:
+            # temporary hack for nightly gfortran build for ARM macs
+            # todo: clean up if/when all repos have an ARM mac build
+            if (
+                repo == "modflow6-nightly-build"
+                and "macarm.zip" in asset_names
+                and processor() == "arm"
+                and ostag == "mac.zip"
+            ):
+                continue
+            break
     else:
-        for asset in assets:
-            if ostag in asset["name"]:
-                break
-        else:
-            raise ValueError(
-                f"could not find ostag {ostag!r} from release {release['tag_name']!r}; "
-                f"see available assets here:\n{release['html_url']}"
-            )
-    asset_name = asset["name"]
+        raise ValueError(
+            f"could not find ostag {ostag!r} from release {release['tag_name']!r}; "
+            f"see available assets here:\n{release['html_url']}"
+        )
     download_url = asset["browser_download_url"]
     if repo == "modflow6":
         asset_pth = Path(asset_name)
-        asset_stem = asset_pth.stem
         asset_suffix = asset_pth.suffix
         dst_fname = "-".join([repo, release["tag_name"], ostag]) + asset_suffix
     else:
@@ -473,21 +490,19 @@ def run_main(
         if subset:
             meta["subset"] = sorted(subset)
     with zipfile.ZipFile(download_pth, "r") as zipf:
-        if repo == "modflow6":
-            # modflow6 release contains the whole repo with an internal bindir
-            for pth in zipf.namelist():
-                p = Path(pth)
-                if p.parent.name == "bin":
-                    full_path[p.name] = pth
-            files = set(full_path.keys())
-        else:
-            # assume all files to be extracted
+        # First gather files within internal directories named "bin"
+        for pth in zipf.namelist():
+            p = Path(pth)
+            if p.parent.name == "bin":
+                full_path[p.name] = pth
+        files = set(full_path.keys())
+
+        if not files:
+            # there was no internal "bin", so assume all files to be extracted
             files = set(zipf.namelist())
 
         code = False
         if "code.json" in files and repo == "executables":
-            # don't extract this file
-            files.remove("code.json")
             code_bytes = zipf.read("code.json")
             code = json.loads(code_bytes.decode())
             if meta_path:
@@ -495,6 +510,10 @@ def run_main(
 
                 code_md5 = hashlib.md5(code_bytes).hexdigest()
                 meta["code_json_md5"] = code_md5
+
+        if "code.json" in files:
+            # don't extract this file
+            files.remove("code.json")
 
         if subset:
             nosub = False
@@ -577,7 +596,7 @@ def run_main(
         for fpath in extract:
             fpath = Path(fpath)
             bindir_path = bindir / fpath
-            bindir_path.rename(bindir / fpath.name)
+            bindir_path.replace(bindir / fpath.name)
             rmdirs.add(fpath.parent)
         # clean up directories, starting with the longest
         for rmdir in reversed(sorted(rmdirs)):
@@ -587,9 +606,9 @@ def run_main(
                 bindir_path = bindir / subdir
                 if bindir_path == bindir:
                     break
-                bindir_path.rmdir()
+                shutil.rmtree(str(bindir_path))
 
-    if ostag in ["linux", "mac"]:
+    if ostag in ["linux", "mac", "macarm"]:
         # similar to "chmod +x fname" for each executable
         for fname in chmod:
             pth = bindir / fname
@@ -685,10 +704,16 @@ Examples:
         )
     parser.add_argument("bindir", help=bindir_help)
     parser.add_argument(
+        "--owner",
+        type=str,
+        default=default_owner,
+        help=f"GitHub repository owner; default is '{default_owner}'.",
+    )
+    parser.add_argument(
         "--repo",
         choices=available_repos,
-        default="executables",
-        help="Name of GitHub repository; default is 'executables'.",
+        default=default_repo,
+        help=f"Name of GitHub repository; default is '{default_repo}'.",
     )
     parser.add_argument(
         "--release-id",

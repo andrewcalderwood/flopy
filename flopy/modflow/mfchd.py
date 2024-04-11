@@ -24,8 +24,7 @@ class ModflowChd(Package):
     model : model object
         The model object (of type :class:`flopy.modflow.mf.Modflow`) to which
         this package will be added.
-    stress_period_data : list of boundaries, recarrays, or dictionary of
-        boundaries.
+    stress_period_data : list, recarray, dataframe, or dictionary of boundaries.
 
         Each chd cell is defined through definition of
         layer (int), row (int), column (int), shead (float), ehead (float)
@@ -112,7 +111,6 @@ class ModflowChd(Package):
         filenames=None,
         **kwargs,
     ):
-
         # set default unit number if one is not specified
         if unitnumber is None:
             unitnumber = ModflowChd._defaultunit()
@@ -168,7 +166,7 @@ class ModflowChd(Package):
         f_chd.write(f"{self.heading}\n")
         f_chd.write(f" {self.stress_period_data.mxact:9d}")
         for option in self.options:
-            f_chd.write("  {}".format(option))
+            f_chd.write(f"  {option}")
         f_chd.write("\n")
         self.stress_period_data.write_transient(f_chd)
         f_chd.close()

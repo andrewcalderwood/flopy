@@ -7,6 +7,7 @@ MODFLOW Guide
 <https://water.usgs.gov/ogw/modflow/MODFLOW-2005-Guide/lmt6.html>`_.
 
 """
+
 import os
 
 from ..pakbase import Package
@@ -86,7 +87,6 @@ class ModflowLmt(Package):
         unitnumber=None,
         filenames=None,
     ):
-
         # set default unit number of one is not specified
         if unitnumber is None:
             unitnumber = ModflowLmt._defaultunit()

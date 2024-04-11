@@ -168,7 +168,6 @@ class Mt3dSsm(Package):
         filenames=None,
         **kwargs,
     ):
-
         if unitnumber is None:
             unitnumber = Mt3dSsm._defaultunit()
         elif unitnumber == 0:
@@ -255,9 +254,9 @@ class Mt3dSsm(Package):
                 self.mxss += (self.parent.btn.icbund < 0).sum()
 
             for p in self.__SsmPackages:
-                if (p.label == "BAS6") and (p.instance != None):
+                if (p.label == "BAS6") and (p.instance is not None):
                     self.mxss += (p.instance.ibound.array < 0).sum()
-                elif p.instance != None:
+                elif p.instance is not None:
                     self.mxss += p.instance._ncells()
         else:
             self.mxss = mxss
@@ -273,7 +272,6 @@ class Mt3dSsm(Package):
                 print("   explicit crcg in file")
 
         if crch is not None:
-
             self.crch = []
             t2d = Transient2d(
                 model,
@@ -456,7 +454,7 @@ class Mt3dSsm(Package):
         # Loop through each stress period and write ssm information
         nper = self.parent.nper
         for kper in range(nper):
-            if f_ssm.closed == True:
+            if f_ssm.closed:
                 f_ssm = open(f_ssm.name, "a")
 
             # Distributed sources and sinks (Recharge and Evapotranspiration)
@@ -496,7 +494,7 @@ class Mt3dSsm(Package):
             if self.stress_period_data is not None:
                 self.stress_period_data.write_transient(f_ssm, single_per=kper)
             else:
-                f_ssm.write("{}\n".format(0))
+                f_ssm.write("0\n")
 
         f_ssm.close()
         return
@@ -664,7 +662,6 @@ class Mt3dSsm(Package):
         stress_period_data = {}
 
         for iper in range(nper):
-
             if model.verbose:
                 print(f"   loading ssm for kper {iper + 1:5d}")
 

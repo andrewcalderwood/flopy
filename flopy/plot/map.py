@@ -3,11 +3,14 @@ import warnings
 import matplotlib.colors
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from matplotlib.collections import LineCollection, PathCollection
 from matplotlib.path import Path
+from numpy.lib.recfunctions import stack_arrays
 
 from ..utils import geometry
 from . import plotutil
+from .plotutil import to_mp7_endpoints, to_mp7_pathlines
 
 warnings.simplefilter("always", PendingDeprecationWarning)
 
@@ -42,7 +45,6 @@ class PlotMapView:
     def __init__(
         self, model=None, modelgrid=None, ax=None, layer=0, extent=None
     ):
-
         self.model = model
         self.layer = layer
         self.mg = None
@@ -79,6 +81,25 @@ class PlotMapView:
         if self._extent is None:
             self._extent = self.mg.extent
         return self._extent
+
+    def _set_axes_limits(self, ax):
+        """
+        Internal method to set axes limits
+
+        Parameters
+        ----------
+        ax : matplotlib.pyplot axis
+            The plot axis
+
+        Returns
+        -------
+        ax : matplotlib.pyplot axis object
+
+        """
+        if ax.get_autoscale_on():
+            ax.set_xlim(self.extent[0], self.extent[1])
+            ax.set_ylim(self.extent[2], self.extent[3])
+        return ax
 
     def plot_array(self, a, masked_values=None, **kwargs):
         """
@@ -150,21 +171,28 @@ class PlotMapView:
         ax.add_collection(collection)
 
         # set limits
-        ax.set_xlim(self.extent[0], self.extent[1])
-        ax.set_ylim(self.extent[2], self.extent[3])
+        ax = self._set_axes_limits(ax)
         return collection
 
-    def contour_array(self, a, masked_values=None, **kwargs):
+    def contour_array(self, a, masked_values=None, tri_mask=False, **kwargs):
         """
-        Contour an array.  If the array is three-dimensional, then the method
-        will contour the layer tied to this class (self.layer).
+        Contour an array on the grid. By default the top layer
+        is contoured. To select a different layer, specify the
+        layer in the class constructor.
+
+        For structured and vertex grids, the array may be 1D, 2D or 3D.
+        For unstructured grids, the array must be 1D or 2D.
 
         Parameters
         ----------
-        a : numpy.ndarray
+        a : 1D, 2D or 3D array-like
             Array to plot.
         masked_values : iterable of floats, ints
             Values to mask.
+        tri_mask : bool
+            Boolean flag that masks triangulation and contouring
+            by nearest grid neighbors. This flag is useful for contouring
+            on unstructured model domains that have holes in the grid.
         **kwargs : dictionary
             keyword arguments passed to matplotlib.pyplot.pcolormesh
 
@@ -191,7 +219,6 @@ class PlotMapView:
         ax = kwargs.pop("ax", self.ax)
         filled = kwargs.pop("filled", False)
         plot_triplot = kwargs.pop("plot_triplot", False)
-        tri_mask = kwargs.pop("tri_mask", False)
 
         if "colors" in kwargs.keys():
             if "cmap" in kwargs.keys():
@@ -212,6 +239,20 @@ class PlotMapView:
 
         # use standard contours for structured grid, otherwise tricontours
         if self.mg.grid_type == "structured":
+            ismasked = None
+            if masked_values is not None:
+                self._masked_values.extend(list(masked_values))
+
+            for mval in self._masked_values:
+                if ismasked is None:
+                    ismasked = np.isclose(plotarray, mval)
+                else:
+                    t = np.isclose(plotarray, mval)
+                    ismasked += t
+
+            if ismasked is not None:
+                plotarray[ismasked] = np.nan
+
             contour_set = (
                 ax.contourf(xcentergrid, ycentergrid, plotarray, **kwargs)
                 if filled
@@ -261,7 +302,7 @@ class PlotMapView:
                     for ix, nodes in enumerate(triangles):
                         neighbors = self.mg.neighbors(nodes[i], as_nodes=True)
                         isin = np.isin(nodes[i + 1 :], neighbors)
-                        if not np.alltrue(isin):
+                        if not np.all(isin):
                             mask[ix] = True
 
             if ismasked is not None:
@@ -282,8 +323,7 @@ class PlotMapView:
             if plot_triplot:
                 ax.triplot(triang, color="black", marker="o", lw=0.75)
 
-        ax.set_xlim(self.extent[0], self.extent[1])
-        ax.set_ylim(self.extent[2], self.extent[3])
+        ax = self._set_axes_limits(ax)
 
         return contour_set
 
@@ -400,8 +440,7 @@ class PlotMapView:
         collection = LineCollection(grid_lines, colors=colors, **kwargs)
 
         ax.add_collection(collection)
-        ax.set_xlim(self.extent[0], self.extent[1])
-        ax.set_ylim(self.extent[2], self.extent[3])
+        ax = self._set_axes_limits(ax)
         return collection
 
     def plot_bc(
@@ -543,8 +582,8 @@ class PlotMapView:
 
         Parameters
         ----------
-        shp : string or pyshp shapefile object
-            Name of the shapefile to plot
+        shp : str, os.PathLike or pyshp shapefile object
+            Path of the shapefile to plot
 
         kwargs : dictionary
             Keyword arguments passed to plotutil.plot_shapefile()
@@ -562,7 +601,8 @@ class PlotMapView:
         obj : collection object
             obj can accept the following types
 
-            str : shapefile name
+            str : shapefile path
+            PathLike : shapefile path
             shapefile.Reader object
             list of [shapefile.Shape, shapefile.Shape,]
             shapefile.Shapes object
@@ -581,6 +621,7 @@ class PlotMapView:
         """
         ax = kwargs.pop("ax", self.ax)
         patch_collection = plotutil.plot_shapefile(obj, ax, **kwargs)
+        ax = self._set_axes_limits(ax)
         return patch_collection
 
     def plot_vector(
@@ -677,49 +718,75 @@ class PlotMapView:
         # these are vectors not locations
         urot, vrot = geometry.rotate(u, v, 0.0, 0.0, self.mg.angrot_radians)
         quiver = ax.quiver(x, y, urot, vrot, pivot=pivot, **kwargs)
+        ax = self._set_axes_limits(ax)
         return quiver
 
     def plot_pathline(self, pl, travel_time=None, **kwargs):
         """
-        Plot the MODPATH pathlines.
+        Plot particle pathlines. Compatible with MODFLOW 6 PRT particle track
+        data format, or MODPATH 6 or 7 pathline data format.
 
         Parameters
         ----------
-        pl : list of rec arrays or a single rec array
-            rec array or list of rec arrays is data returned from
-            modpathfile PathlineFile get_data() or get_alldata()
-            methods. Data in rec array is 'x', 'y', 'z', 'time',
-            'k', and 'particleid'.
+        pl : list of recarrays or dataframes, or a single recarray or dataframe
+            Particle pathline data. If a list of recarrays or dataframes,
+            each must contain the path of only a single particle. If just
+            one recarray or dataframe, it should contain the paths of all
+            particles. The flopy.utils.modpathfile.PathlineFile.get_data()
+            or get_alldata() return value may be passed directly as this
+            argument.
+
+            For MODPATH 6 or 7 pathlines, columns must include 'x', 'y', 'z',
+            'time', 'k', and 'particleid'. Additional columns are ignored.
+
+            For MODFLOW 6 PRT pathlines, columns must include 'x', 'y', 'z',
+            't', 'trelease', 'imdl', 'iprp', 'irpt', and 'ilay'. Additional
+            columns are ignored. Note that MODFLOW 6 PRT does not assign to
+            particles a unique ID, but infers particle identity from 'imdl',
+            'iprp', 'irpt', and 'trelease' combos (i.e. via composite key).
         travel_time : float or str
-            travel_time is a travel time selection for the displayed
-            pathlines. If a float is passed then pathlines with times
-            less than or equal to the passed time are plotted. If a
-            string is passed a variety logical constraints can be added
-            in front of a time value to select pathlines for a select
-            period of time. Valid logical constraints are <=, <, >=, and
-            >. For example, to select all pathlines less than 10000 days
-            travel_time='< 10000' would be passed to plot_pathline.
-            (default is None)
-        kwargs : layer, ax, colors.  The remaining kwargs are passed
-            into the LineCollection constructor. If layer='all',
-            pathlines are output for all layers
+            Travel time selection. If a float, then pathlines with total
+            time less than or equal to the given value are plotted. If a
+            string, the value must be a comparison operator, then a time
+            value. Valid operators are <=, <, ==, >=, and >. For example,
+            to filter pathlines with less than 10000 units of total time
+            traveled, use '< 10000'. (Default is None.)
+        kwargs : dict
+            Explicitly supported kwargs are layer, ax, colors.
+            Any remaining kwargs are passed into the LineCollection
+            constructor. If layer='all', pathlines are shown for all layers.
 
         Returns
         -------
         lc : matplotlib.collections.LineCollection
-
+            The pathlines added to the plot.
         """
 
         from matplotlib.collections import LineCollection
 
-        # make sure pathlines is a list
+        # make sure pl is a list
         if not isinstance(pl, list):
-            pids = np.unique(pl["particleid"])
-            if len(pids) > 1:
-                pl = [pl[pl["particleid"] == pid] for pid in pids]
-            else:
-                pl = [pl]
+            if not isinstance(pl, (np.ndarray, pd.DataFrame)):
+                raise TypeError(
+                    "Pathline data must be a list of recarrays or dataframes, "
+                    f"or a single recarray or dataframe, got {type(pl)}"
+                )
+            pl = [pl]
 
+        # convert prt to mp7 format
+        pl = [
+            to_mp7_pathlines(
+                p.to_records(index=False) if isinstance(p, pd.DataFrame) else p
+            )
+            for p in pl
+        ]
+
+        # merge pathlines then split on particleid
+        pls = stack_arrays(pl, asrecarray=True, usemask=False)
+        pids = np.unique(pls["particleid"])
+        pl = [pls[pls["particleid"] == pid] for pid in pids]
+
+        # configure layer
         if "layer" in kwargs:
             kon = kwargs.pop("layer")
             if isinstance(kon, bytes):
@@ -732,19 +799,21 @@ class PlotMapView:
         else:
             kon = self.layer
 
+        # configure plot settings
         marker = kwargs.pop("marker", None)
         markersize = kwargs.pop("markersize", None)
         markersize = kwargs.pop("ms", markersize)
         markercolor = kwargs.pop("markercolor", None)
         markerevery = kwargs.pop("markerevery", 1)
         ax = kwargs.pop("ax", self.ax)
-
         if "colors" not in kwargs:
             kwargs["colors"] = "0.5"
 
+        # compose pathlines
         linecol = []
         markers = []
         for p in pl:
+            # filter by travel time
             tp = plotutil.filter_modpath_by_travel_time(p, travel_time)
 
             # transform data!
@@ -755,8 +824,10 @@ class PlotMapView:
                 self.mg.yoffset,
                 self.mg.angrot_radians,
             )
+
             # build polyline array
             arr = np.vstack((x0r, y0r)).T
+
             # select based on layer
             if kon >= 0:
                 kk = p["k"].copy().reshape(p.shape[0], 1)
@@ -764,7 +835,8 @@ class PlotMapView:
                 arr = np.ma.masked_where((kk != kon), arr)
             else:
                 arr = np.ma.asarray(arr)
-            # append line to linecol if there is some unmasked segment
+
+            # append pathline if there are any unmasked segments
             if not arr.mask.all():
                 linecol.append(arr)
                 if not arr.mask.all():
@@ -773,6 +845,7 @@ class PlotMapView:
                         for xy in arr[::markerevery]:
                             if not np.all(xy.mask):
                                 markers.append(xy)
+
         # create line collection
         lc = None
         if len(linecol) > 0:
@@ -789,38 +862,41 @@ class PlotMapView:
                     ms=markersize,
                 )
 
-        ax.set_xlim(self.extent[0], self.extent[1])
-        ax.set_ylim(self.extent[2], self.extent[3])
+        # set axis limits
+        ax = self._set_axes_limits(ax)
         return lc
 
     def plot_timeseries(self, ts, travel_time=None, **kwargs):
         """
-        Plot the MODPATH timeseries.
+        Plot MODPATH 6 or 7 timeseries. Incompatible with MODFLOW 6 PRT.
 
         Parameters
         ----------
-        ts : list of rec arrays or a single rec array
-            rec array or list of rec arrays is data returned from
-            modpathfile TimeseriesFile get_data() or get_alldata()
-            methods. Data in rec array is 'x', 'y', 'z', 'time',
-            'k', and 'particleid'.
+        ts : list of recarrays or dataframes, or a single recarray or dataframe
+            Particle timeseries data. If a list of recarrays or dataframes,
+            each must contain the path of only a single particle. If just
+            one recarray or dataframe, it should contain the paths of all
+            particles. Timeseries data returned from TimeseriesFile.get_data()
+            or get_alldata() can be passed directly as this argument. Data
+            columns should be 'x', 'y', 'z', 'time', 'k', and 'particleid'
+            at minimum. Additional columns are ignored. The 'particleid'
+            column must be unique to each particle path.
         travel_time : float or str
-            travel_time is a travel time selection for the displayed
-            pathlines. If a float is passed then pathlines with times
-            less than or equal to the passed time are plotted. If a
-            string is passed a variety logical constraints can be added
-            in front of a time value to select pathlines for a select
-            period of time. Valid logical constraints are <=, <, >=, and
-            >. For example, to select all pathlines less than 10000 days
-            travel_time='< 10000' would be passed to plot_pathline.
-            (default is None)
-        kwargs : layer, ax, colors.  The remaining kwargs are passed
-            into the LineCollection constructor. If layer='all',
-            pathlines are output for all layers
+            Travel time selection. If a float, then pathlines with total
+            time less than or equal to the given value are plotted. If a
+            string, the value must be a comparison operator, then a time
+            value. Valid operators are <=, <, ==, >=, and >. For example,
+            to filter pathlines with less than 10000 units of total time
+            traveled, use '< 10000'. (Default is None.)
+        kwargs : dict
+            Explicitly supported kwargs are layer, ax, colors.
+            Any remaining kwargs are passed into the LineCollection
+            constructor. If layer='all', pathlines are shown for all layers.
 
         Returns
         -------
-            lo : list of Line2D objects
+        lc : matplotlib.collections.LineCollection
+            The pathlines added to the plot.
         """
         if "color" in kwargs:
             kwargs["markercolor"] = kwargs["color"]
@@ -836,13 +912,20 @@ class PlotMapView:
         **kwargs,
     ):
         """
-        Plot the MODPATH endpoints.
+        Plot particle endpoints. Compatible with MODFLOW 6 PRT particle
+        track data format, or MODPATH 6 or 7 endpoint data format.
 
         Parameters
         ----------
-        ep : rec array
+        ep : recarray or dataframe
             A numpy recarray with the endpoint particle data from the
-            MODPATH 6 endpoint file
+            MODPATH endpoint file.
+
+            For MODFLOW 6 PRT pathlines, columns must include 'x', 'y', 'z',
+            't', 'trelease', 'imdl', 'iprp', 'irpt', and 'ilay'. Additional
+            columns are ignored. Note that MODFLOW 6 PRT does not assign to
+            particles a unique ID, but infers particle identity from 'imdl',
+            'iprp', 'irpt', and 'trelease' combos (i.e. via composite key).
         direction : str
             String defining if starting or ending particle locations should be
             considered. (default is 'ending')
@@ -868,22 +951,28 @@ class PlotMapView:
 
         Returns
         -------
-        sp : matplotlib.pyplot.scatter
+        sp : matplotlib.collections.PathCollection
+            The PathCollection added to the plot.
 
         """
 
-        ax = kwargs.pop("ax", self.ax)
+        # convert ep to recarray if needed
+        if isinstance(ep, pd.DataFrame):
+            ep = ep.to_records(index=False)
 
+        # convert ep from prt to mp7 format if needed
+        if "t" in ep.dtype.names:
+            from .plotutil import to_mp7_endpoints
+
+            ep = to_mp7_endpoints(ep)
+
+        # parse selection options
+        ax = kwargs.pop("ax", self.ax)
         tep, _, xp, yp = plotutil.parse_modpath_selection_options(
             ep, direction, selection, selection_direction
         )
-        # scatter kwargs that users may redefine
-        if "c" not in kwargs:
-            c = tep["time"] - tep["time0"]
-        else:
-            c = np.empty((tep.shape[0]), dtype="S30")
-            c.fill(kwargs.pop("c"))
 
+        # marker size
         s = kwargs.pop("s", np.sqrt(50))
         s = float(kwargs.pop("size", s)) ** 2.0
 
@@ -904,10 +993,18 @@ class PlotMapView:
         arr = np.vstack((x0r, y0r)).T
 
         # plot the end point data
-        sp = ax.scatter(arr[:, 0], arr[:, 1], c=c, s=s, **kwargs)
+        if "c" in kwargs or "color" in kwargs:
+            if "c" in kwargs and "color" in kwargs:
+                kwargs.pop("color")
+            sp = ax.scatter(arr[:, 0], arr[:, 1], s=s, **kwargs)
+        else:
+            c = tep["time"] - tep["time0"]
+            sp = ax.scatter(arr[:, 0], arr[:, 1], c=c, s=s, **kwargs)
 
         # add a colorbar for travel times
         if createcb:
             cb = plt.colorbar(sp, ax=ax, shrink=shrink)
             cb.set_label(colorbar_label)
+
+        ax = self._set_axes_limits(ax)
         return sp

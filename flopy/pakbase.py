@@ -4,9 +4,11 @@ pakbase module
   all of the other packages inherit from.
 
 """
+
 import abc
 import os
 import webbrowser as wb
+from typing import Union
 
 import numpy as np
 from numpy.lib.recfunctions import stack_arrays
@@ -208,7 +210,7 @@ class PackageInterface:
             if kp in self.__dict__:
                 kparams[kp] = name
         if "hk" in self.__dict__:
-            if self.hk.shape[1] == None:
+            if self.hk.shape[1] is None:
                 hk = np.asarray(
                     [a.array.flatten() for a in self.hk], dtype=object
                 )
@@ -217,7 +219,7 @@ class PackageInterface:
         else:
             hk = self.k.array.copy()
         if "vka" in self.__dict__ and self.layvka.sum() > 0:
-            if self.vka.shape[1] == None:
+            if self.vka.shape[1] is None:
                 vka = np.asarray(
                     [a.array.flatten() for a in self.vka], dtype=object
                 )
@@ -382,9 +384,11 @@ class PackageInterface:
             if "laytyp" in self.__dict__:
                 inds = np.array(
                     [
-                        True
-                        if l > 0 or l < 0 and "THICKSTRT" in self.options
-                        else False
+                        (
+                            True
+                            if l > 0 or l < 0 and "THICKSTRT" in self.options
+                            else False
+                        )
                         for l in self.laytyp
                     ]
                 )
@@ -412,6 +416,15 @@ class PackageInterface:
                     skip_sy_check = True
             else:
                 iconvert = self.iconvert.array
+                inds = np.array(
+                    [
+                        True if l > 0 or l < 0 else False
+                        for l in iconvert.flatten()
+                    ]
+                )
+                if not inds.any():
+                    skip_sy_check = True
+
                 for ishape in np.ndindex(active.shape):
                     if active[ishape]:
                         active[ishape] = (
@@ -496,7 +509,7 @@ class Package(PackageInterface):
         s = self.__doc__
         exclude_attributes = ["extension", "heading", "name", "parent", "url"]
         for attr, value in sorted(self.__dict__.items()):
-            if not (attr in exclude_attributes):
+            if attr not in exclude_attributes:
                 if isinstance(value, list):
                     if len(value) == 1:
                         s += f" {attr} = {value[0]!s}\n"
@@ -645,8 +658,6 @@ class Package(PackageInterface):
         # return [data_object, data_object, ...]
         dl = []
         attrs = dir(self)
-        if "sr" in attrs:
-            attrs.remove("sr")
         if "start_datetime" in attrs:
             attrs.remove("start_datetime")
         for attr in attrs:
@@ -881,7 +892,13 @@ class Package(PackageInterface):
         return
 
     @staticmethod
-    def load(f, model, pak_type, ext_unit_dict=None, **kwargs):
+    def load(
+        f: Union[str, bytes, os.PathLike],
+        model,
+        pak_type,
+        ext_unit_dict=None,
+        **kwargs,
+    ):
         """
         Default load method for standard boundary packages.
 
@@ -1244,3 +1261,12 @@ class Package(PackageInterface):
                 level=0,
             )
         return pak
+
+    def set_cbc_output_file(self, ipakcb, model, fname):
+        if ipakcb is None:
+            ipakcb = 0
+        else:
+            if ipakcb == "default":
+                ipakcb = 53
+            model.add_output_file(ipakcb, fname=fname, package=self._ftype())
+        self.ipakcb = ipakcb

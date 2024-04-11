@@ -1,10 +1,16 @@
 """
 Module for input/output utilities
 """
+
 import os
+import platform
 import sys
+from pathlib import Path
+from shutil import which
+from typing import Union
 
 import numpy as np
+import pandas as pd
 
 
 def _fmt_string(array, float_format="{}"):
@@ -285,12 +291,11 @@ def flux_to_wel(cbc_file, text, precision="single", model=None, verbose=False):
 
     # create a empty numpy array of shape (time,layer,row,col)
     m4d = np.zeros((cbf.nper, cbf.nlay, cbf.nrow, cbf.ncol), dtype=np.float32)
-    m4d[:] = np.NaN
+    m4d[:] = np.nan
 
     # process the records in the cell budget file
     iper = -1
     for kstpkper in cbf.kstpkper:
-
         kstpkper = (kstpkper[0] - 1, kstpkper[1] - 1)
         kper = kstpkper[1]
         # if we haven't visited this kper yet
@@ -300,7 +305,7 @@ def flux_to_wel(cbc_file, text, precision="single", model=None, verbose=False):
                 arr = arr[0]
                 print(arr.max(), arr.min(), arr.sum())
                 # masked where zero
-                arr[np.where(arr == 0.0)] = np.NaN
+                arr[np.where(arr == 0.0)] = np.nan
                 m4d[iper + 1] = arr
             iper += 1
 
@@ -323,7 +328,7 @@ def loadtxt(
     file, delimiter=" ", dtype=None, skiprows=0, use_pandas=True, **kwargs
 ):
     """
-    Use pandas if it is available to load a text file
+    Use pandas to load a text file
     (significantly faster than n.loadtxt or genfromtxt see
     https://stackoverflow.com/q/18259393/)
 
@@ -347,17 +352,13 @@ def loadtxt(
     ra : np.recarray
         Numpy record array of file contents.
     """
-    from ..utils import import_optional_dependency
 
-    # test if pandas should be used, if available
     if use_pandas:
-        pd = import_optional_dependency("pandas")
         if delimiter.isspace():
             kwargs["delim_whitespace"] = True
         if isinstance(dtype, np.dtype) and "names" not in kwargs:
             kwargs["names"] = dtype.names
 
-    # if use_pandas and pd then use pandas
     if use_pandas:
         df = pd.read_csv(file, dtype=dtype, skiprows=skiprows, **kwargs)
         return df.to_records(index=False)
@@ -480,9 +481,7 @@ def ulstrd(f, nlist, ra, model, sfac_columns, ext_unit_dict):
 
     # else, read ascii
     else:
-
         for ii in range(nlist):
-
             # first line was already read
             if ii != 0:
                 line = file_handle.readline()
@@ -543,3 +542,70 @@ def get_ts_sp(line):
     sp = int(ll[0])
 
     return ts, sp
+
+
+def relpath_safe(
+    path: Union[str, os.PathLike],
+    start: Union[str, os.PathLike] = os.curdir,
+    scrub: bool = False,
+) -> str:
+    """
+    Return a relative version of the path starting at the given start path.
+    This is impossible on Windows if the paths are on different drives, in
+    which case the absolute path is returned. The builtin os.path.relpath
+    raises a ValueError, this method is a workaround to avoid interrupting
+    normal control flow (background at https://bugs.python.org/issue7195).
+
+    This method also truncates/obfuscates absolute paths with usernames.
+
+    Parameters
+    ----------
+    path : str or PathLike
+        the path to truncate relative to the start path
+    start : str or PathLike, default "."
+        the starting path, defaults to the current working directory
+    scrub : bool, default False
+        whether to remove the current login name from paths
+    Returns
+    -------
+        str : the relative path, unless the platform is Windows and the `path`
+        is not on the same drive as `start`, in which case the absolute path,
+        with elements before and including usernames removed and obfuscated
+    """
+
+    if start == os.curdir:
+        start = os.getcwd()
+
+    if platform.system() == "Windows":
+        pa = os.path.abspath(path)
+        sa = os.path.abspath(start)
+        pd = os.path.splitdrive(pa)[0].lower()
+        sd = os.path.splitdrive(sa)[0].lower()
+        p = os.path.abspath(path) if pd != sd else os.path.relpath(pa, sa)
+    else:
+        p = os.path.relpath(path, start)
+
+    return scrub_login(p) if scrub else p
+
+
+def scrub_login(s: str) -> str:
+    """
+    Remove the current login name from the given string,
+    replacing any occurences with "***".
+
+    Parameters
+    ----------
+    s : str
+        the input string
+
+    Returns
+    -------
+        the string with login name obfuscated
+    """
+
+    try:
+        login = os.getlogin()
+        return s.replace(login, "***")
+    except OSError:
+        # OSError is possible in CI, e.g. 'No such device or address'
+        return s

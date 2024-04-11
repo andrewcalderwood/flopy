@@ -5,6 +5,7 @@ mfusgsms module.  This is the solver for MODFLOW-USG.
 Contains the MfUsgSms class. Note that the user can access
 the MfUsgSms class as `flopy.mfusg.MfUsgSms`.
 """
+
 from ..pakbase import Package
 from ..utils.flopy_io import line_parse
 from .mfusg import MfUsg
@@ -343,7 +344,7 @@ class MfUsgSms(Package):
         if nopt > 0:
             f.write(" ".join(self.options) + "\n")
         f.write(
-            "{0} {1} {2} {3} {4} {5} {6}\n".format(
+            "{} {} {} {} {} {} {}\n".format(
                 self.hclose,
                 self.hiclose,
                 self.mxiter,
@@ -355,7 +356,7 @@ class MfUsgSms(Package):
         )
         if self.nonlinmeth != 0 and nopt == 0:
             f.write(
-                "{0} {1} {2} {3} {4} {5} {6} {7}\n".format(
+                "{} {} {} {} {} {} {} {}\n".format(
                     self.theta,
                     self.akappa,
                     self.gamma,
@@ -368,7 +369,7 @@ class MfUsgSms(Package):
             )
         if self.linmeth == 1 and nopt == 0:
             f.write(
-                "{0} {1} {2} {3} {4} {5} {6} {7}\n".format(
+                "{} {} {} {} {} {} {} {}\n".format(
                     self.iacl,
                     self.norder,
                     self.level,
@@ -381,7 +382,7 @@ class MfUsgSms(Package):
             )
         if self.linmeth == 2 and nopt == 0:
             f.write(
-                "{0} {1} {2} {3} {4} {5}\n".format(
+                "{} {} {} {} {} {}\n".format(
                     self.clin,
                     self.ipc,
                     self.iscl,

@@ -118,7 +118,6 @@ class Mt3dLkt(Package):
         iprn=-1,
         **kwargs,
     ):
-
         # set default unit number of one is not specified
         if unitnumber is None:
             unitnumber = Mt3dLkt._reservedunit()
@@ -245,7 +244,7 @@ class Mt3dLkt(Package):
 
         # Item 1
         f_lkt.write(
-            "{0:10d}{1:10d}{2:10}{3:10}          ".format(
+            "{:10d}{:10d}{:10}{:10}          ".format(
                 self.nlkinit, self.mxlkbc, self.icbclk, self.ietlak
             )
             + "# NLKINIT, MXLKBC, ICBCLK, IETLAK\n"
@@ -259,7 +258,7 @@ class Mt3dLkt(Package):
         # (Loop through each stress period and write LKT information)
         nper = self.parent.nper
         for kper in range(nper):
-            if f_lkt.closed == True:
+            if f_lkt.closed:
                 f_lkt = open(f_lkt.name, "a")
 
             # List of concentrations associated with fluxes in/out of lake

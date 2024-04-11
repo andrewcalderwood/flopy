@@ -2,6 +2,7 @@
 mfdisu module.  Contains the MfUsgDisU class. Note that the user can access
 the MfUsgDisU class as `flopy.mfusg.MfUsgDisU`.
 """
+
 import numpy as np
 
 from ..discretization.unstructuredgrid import UnstructuredGrid
@@ -466,7 +467,7 @@ class MfUsgDisU(Package):
         Check layer thickness.
 
         """
-        return (self.parent.modelgrid.thick > 0).all()
+        return (self.parent.modelgrid.cell_thickness > 0).all()
 
     def get_cell_volumes(self):
         """
@@ -477,7 +478,7 @@ class MfUsgDisU(Package):
         vol : array of floats (nodes)
 
         """
-        vol = np.empty((self.nodes))
+        vol = np.empty((self.nodes,))
         for n in range(self.nodes):
             nn = n
             if self.ivsd == -1:
@@ -493,7 +494,7 @@ class MfUsgDisU(Package):
         elevation.
 
         """
-        z = np.empty((self.nodes))
+        z = np.empty((self.nodes,))
         z[:] = (self.top.array - self.bot.array) / 2.0
         return z
 
@@ -831,7 +832,7 @@ class MfUsgDisU(Package):
             self.lenuni,
             self.idsymrd,
         ]:
-            s += "{} ".format(var)
+            s += f"{var} "
         f_dis.write(s + "\n")
 
         # Item 2: LAYCBD
@@ -882,9 +883,9 @@ class MfUsgDisU(Package):
                 f"{self.perlen[t]:14f}{self.nstp[t]:14d}{self.tsmult[t]:10f} "
             )
             if self.steady[t]:
-                f_dis.write(" {0:3s}\n".format("SS"))
+                f_dis.write(" SS\n")
             else:
-                f_dis.write(" {0:3s}\n".format("TR"))
+                f_dis.write(" TR\n")
 
         # Close and return
         f_dis.close()

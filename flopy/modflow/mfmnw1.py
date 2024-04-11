@@ -19,10 +19,9 @@ class ModflowMnw1(Package):
         this package will be added.
     mxmnw : integer
         maximum number of multi-node wells to be simulated
-    ipakcb : integer
-        A flag that is used to determine if cell-by-cell budget data should be
-        saved. If ipakcb is non-zero cell-by-cell budget data will be saved.
-        (default is 0).
+    ipakcb : int, optional
+        Toggles whether cell-by-cell budget data should be saved. If None or zero,
+        budget data will not be saved (default is None).
     iwelpt : integer
         verbosity flag
     nomoiter : integer
@@ -103,13 +102,8 @@ class ModflowMnw1(Package):
         # set filenames
         filenames = self._prepare_filenames(filenames, 2)
 
-        # update external file information with cbc output, if necessary
-        if ipakcb is not None:
-            model.add_output_file(
-                ipakcb, fname=filenames[1], package=self._ftype()
-            )
-        else:
-            ipakcb = 0
+        # cbc output file
+        self.set_cbc_output_file(ipakcb, model, filenames[1])
 
         # call base package constructor
         super().__init__(
@@ -126,7 +120,6 @@ class ModflowMnw1(Package):
         self.mxmnw = (
             mxmnw  # -maximum number of multi-node wells to be simulated
         )
-        self.ipakcb = ipakcb
         self.iwelpt = iwelpt  # -verbosity flag
         self.nomoiter = nomoiter  # -integer indicating the number of iterations for which flow in MNW wells is calculated
         self.kspref = kspref  # -alphanumeric key indicating which set of water levels are to be used as reference values for calculating drawdown
@@ -197,7 +190,6 @@ class ModflowMnw1(Package):
 
     @classmethod
     def load(cls, f, model, nper=None, gwt=False, nsol=1, ext_unit_dict=None):
-
         if model.verbose:
             print("loading mnw1 package file...")
 
@@ -248,7 +240,6 @@ class ModflowMnw1(Package):
             add = True if "add" in line.lower() else False
             itmp = int(line_parse(line)[0])
             if itmp > 0:
-
                 # dataset 5
                 data, qfrcmn_default, qfrcmx_default, qcut_default = _parse_5(
                     f, itmp, qfrcmn_default, qfrcmx_default, qcut_default
@@ -413,7 +404,6 @@ def _parse_5(
     multi = False
     label = ""
     for n in range(itmp):
-
         linetxt = skipcomments(next(f), f).lower()
         line = line_parse(linetxt)
 

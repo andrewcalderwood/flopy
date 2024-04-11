@@ -6,8 +6,10 @@ outputs to VTK.
 import os
 import warnings
 from pathlib import Path
+from typing import Union
 
 import numpy as np
+import pandas as pd
 
 from ..datbase import DataInterface, DataType
 from ..utils import Util3d, import_optional_dependency
@@ -136,7 +138,6 @@ class Vtk:
         smooth=False,
         point_scalars=False,
     ):
-
         vtk = import_optional_dependency("vtk")
 
         if model is None and modelgrid is None:
@@ -1079,34 +1080,91 @@ class Vtk:
 
     def add_pathline_points(self, pathlines, timeseries=False):
         """
-        Method to add Modpath output from a pathline or timeseries file
-        to the grid. Colors will be representative of totim.
+        Method to add particle pathlines to the grid, with points
+        colored by travel-time. Supports MODPATH or MODFLOW6 PRT
+        pathline format, or MODPATH timeseries format.
 
         Parameters
         ----------
-        pathlines : np.recarray or list
-            pathlines accepts a numpy recarray of a particle pathline or
-            a list of numpy reccarrays associated with pathlines
-        timeseries : bool
-            method to plot data as a series of vtk timeseries files for
-            animation or as a single static vtk file. Default is false
-
+        pathlines : pd.dataframe, np.recarray or list
+            Particle pathlines, either as a single dataframe or recarray
+            or a list of such, separated by particle ID. If pathlines are
+            not provided separately, the dataframe or recarray must have
+            columns: 'time', 'k' & 'particleid' for MODPATH 3, 5, 6 or 7,
+            and 'irpt', 'iprp', 'imdl', and 'trelease' for MODFLOW 6 PRT,
+            so particle pathlines can be distinguished.
+        timeseries : bool, optional
+            Whether to plot data as a series of vtk timeseries files for
+            animation or as a single static vtk file. Default is false.
         """
-        if isinstance(pathlines, (np.recarray, np.ndarray)):
-            pathlines = [pathlines]
 
-        keys = ["particleid", "time"]
+        mpx_keys = ["particleid", "time", "k"]
+        prt_keys = ["imdl", "iprp", "irpt", "trelease", "ilay"]
+
+        if isinstance(pathlines, list):
+            if len(pathlines) == 0:
+                return
+            pathlines = [
+                (
+                    pl.to_records(index=False)
+                    if isinstance(pl, pd.DataFrame)
+                    else pl
+                )
+                for pl in pathlines
+            ]
+            if all(k in pathlines[0].dtype.names for k in mpx_keys):
+                keys = mpx_keys
+            elif all(k in pathlines[0].dtype.names for k in prt_keys):
+                keys = prt_keys
+            else:
+                raise ValueError("Unrecognized pathline dtype")
+        elif isinstance(pathlines, (np.recarray, np.ndarray, pd.DataFrame)):
+            if isinstance(pathlines, pd.DataFrame):
+                pathlines = pathlines.to_records(index=False)
+            if all(k in pathlines.dtype.names for k in mpx_keys):
+                keys = mpx_keys
+                pids = np.unique(pathlines.particleid)
+                pathlines = [
+                    pathlines[pathlines.particleid == pid] for pid in pids
+                ]
+            elif all(k in pathlines.dtype.names for k in prt_keys):
+                keys = prt_keys
+                pls = []
+                for imdl in np.unique(pathlines.imdl):
+                    for iprp in np.unique(pathlines.iprp):
+                        for irpt in np.unique(pathlines.irpt):
+                            pl = pathlines[
+                                (pathlines.imdl == imdl)
+                                & (pathlines.iprp == iprp)
+                                & (pathlines.irpt == irpt)
+                            ]
+                            pls.extend(
+                                [pl[pl.trelease == t] for t in np.unique(pl.t)]
+                            )
+                pathlines = pls
+            else:
+                raise ValueError("Unrecognized pathline dtype")
+        else:
+            raise ValueError(
+                "Unsupported pathline format, expected array, recarray, dataframe, or list"
+            )
+
         if not timeseries:
             arrays = {key: [] for key in keys}
             points = []
+            lines = []
             for recarray in pathlines:
                 recarray["z"] *= self.vertical_exageration
+                line = []
                 for rec in recarray:
-                    points.append(tuple(rec[["x", "y", "z"]]))
+                    t = tuple(rec[["x", "y", "z"]])
+                    line.append(t)
+                    points.append(t)
                     for key in keys:
                         arrays[key].append(rec[key])
+                lines.append(line)
 
-            self._set_modpath_point_data(points, arrays)
+            self._set_particle_track_data(points, lines, arrays)
 
         else:
             self.vtk_pathlines = self.__vtk.vtkUnstructuredGrid()
@@ -1260,66 +1318,105 @@ class Vtk:
             self.add_transient_array(d, name, masked_values)
             self.__transient_output_data = True
 
-    def _set_modpath_point_data(self, points, d):
+    def _set_particle_track_data(self, points, lines=None, arrays=None):
         """
-        Method to build the vtk point geometry and set arrays for
-        modpath pathlines
+        Build VTK data structures for particle positions, pathlines, and metadata
 
         Parameters
         ----------
-        points : list
+        points : list or array_like
             list of (x, y, z) points
-        d : dict
-            dictionary of numpy arrays to add to vtk
-
+        lines : list or array_like, optional
+            list of lists or 2D array of particle tracks, each with
+            n >= 1 (x, y, z) coordinates making n - 1 line segments
+        arrays : dict, optional
+            dictionary of array data to associate with points (e.g., particle ID, time)
         """
         from vtk.util import numpy_support
 
-        nverts = len(points)
+        if self.vtk_pathlines is None:
+            self.vtk_pathlines = self.__vtk.vtkUnstructuredGrid()
 
-        self.vtk_pathlines = self.__vtk.vtkUnstructuredGrid()
-
+        # create vtkPoints container
         vtk_points = self.__vtk.vtkPoints()
-        for point in points:
-            vtk_points.InsertNextPoint(point)
-
+        lines = [] if lines is None else lines
+        if any(lines):
+            for line in lines:
+                for point in line:
+                    vtk_points.InsertNextPoint(point)
+        else:
+            for point in points:
+                vtk_points.InsertNextPoint(point)
         self.vtk_pathlines.SetPoints(vtk_points)
 
-        # create a Vertex instance for each point data add to grid
-        for i in range(nverts):
-            vertex = self.__vtk.vtkPolyVertex()
-            vertex.GetPointIds().SetNumberOfIds(1)
-            vertex.GetPointIds().SetId(0, i)
-
-            # set data to the pathline grid
+        # create a vtkPolyLine for each particle track
+        i = 0
+        for line in lines:
+            npts = len(line)
+            poly = self.__vtk.vtkPolyLine()
+            poly.GetPointIds().SetNumberOfIds(npts)
+            for ii in range(0, npts):
+                poly.GetPointIds().SetId(ii, i)
+                i += 1
             self.vtk_pathlines.InsertNextCell(
-                vertex.GetCellType(), vertex.GetPointIds()
+                poly.GetCellType(), poly.GetPointIds()
             )
 
-        # process arrays and add arrays to grid.
-        for name, array in d.items():
+        # create a vtkVertex for each point
+        # necessary if arrays (time & particle ID) live on points?
+        if any(lines):
+            i = 0
+            for line in lines:
+                for _ in line:
+                    vertex = self.__vtk.vtkPolyVertex()
+                    vertex.GetPointIds().SetNumberOfIds(1)
+                    vertex.GetPointIds().SetId(0, i)
+                    self.vtk_pathlines.InsertNextCell(
+                        vertex.GetCellType(), vertex.GetPointIds()
+                    )
+                    i += 1
+        else:
+            for i in range(len(points)):
+                vertex = self.__vtk.vtkPolyVertex()
+                vertex.GetPointIds().SetNumberOfIds(1)
+                vertex.GetPointIds().SetId(0, i)
+                self.vtk_pathlines.InsertNextCell(
+                    vertex.GetCellType(), vertex.GetPointIds()
+                )
+
+        # add arrays (time & particle ID) to points
+        arrays = {} if arrays is None else arrays
+        for name, array in arrays.items():
             array = np.array(array)
             vtk_array = numpy_support.numpy_to_vtk(
                 num_array=array, array_type=self.__vtk.VTK_FLOAT
             )
             vtk_array.SetName(name)
-            self.vtk_pathlines.GetCellData().AddArray(vtk_array)
+            self.vtk_pathlines.GetPointData().AddArray(vtk_array)
 
-    def write(self, f, kper=None):
+    def write(self, f: Union[str, os.PathLike], kper=None):
         """
         Method to write a vtk file from the VTK object
 
         Parameters
         ----------
-        f : os.PathLike or str
+        f : str or PathLike
             vtk file name
         kpers : int, list, tuple
             stress period or list of stress periods to write to vtk. This
             parameter only applies to transient package data.
 
         """
-        grids = [self.vtk_grid, self.vtk_polygons, self.vtk_pathlines]
-        suffix = ["", "_hfb", "_pathline"]
+        grids = [
+            self.vtk_grid,
+            self.vtk_polygons,
+            self.vtk_pathlines,
+        ]
+        suffix = [
+            "",
+            "_hfb",
+            "_pathline",
+        ]
 
         extension = ".vtk"
         if self.pvd:
@@ -1356,7 +1453,7 @@ class Vtk:
                 for time, d in self.__pathline_transient_data.items():
                     tf = self.__create_transient_vtk_path(foo, stp)
                     points = self._pathline_points[time]
-                    self._set_modpath_point_data(points, d)
+                    self._set_particle_track_data(points, arrays=d)
 
                     w.SetInputData(self.vtk_pathlines)
                     w.SetFileName(str(tf))
@@ -1414,13 +1511,29 @@ class Vtk:
                     w.SetFileName(str(foo))
                     w.Update()
 
-        if not type(self.pvd) == bool:
+        if not isinstance(self.pvd, bool):
             if f.suffix not in (".vtk", ".vtu"):
                 pvdfile = f.parent / f"{f.name}.pvd"
             else:
                 pvdfile = f.with_suffix(".pvd")
 
             self.pvd.write(pvdfile)
+
+    def to_pyvista(self):
+        """
+        Convert VTK object to PyVista meshes. If the VTK object contains 0
+        or multiple meshes a list of meshes is returned. Otherwise the one
+        mesh is returned alone. PyVista must be installed for this method.
+
+        Returns
+        -------
+        pyvista.DataSet or list of pyvista.DataSet
+            PyVista mesh or list of meshes
+        """
+        pv = import_optional_dependency("pyvista")
+        grids = [self.vtk_grid, self.vtk_polygons, self.vtk_pathlines]
+        meshes = [pv.wrap(grid) for grid in grids if grid is not None]
+        return meshes[0] if len(meshes) == 1 else meshes
 
     def __create_transient_vtk_path(self, path, kper):
         """
@@ -1440,531 +1553,3 @@ class Vtk:
             {:06d} represents the six zero padded stress period time
         """
         return path.parent / f"{path.stem.rstrip('_')}_{kper:06d}{path.suffix}"
-
-
-def export_model(
-    model,
-    otfolder,
-    package_names=None,
-    nanval=-1e20,
-    smooth=False,
-    point_scalars=False,
-    vtk_grid_type="auto",
-    true2d=False,
-    binary=True,
-    kpers=None,
-):
-    """
-    Export model to vtk
-
-    .. deprecated:: 3.3.5
-        Use :meth:`Vtk.add_model`
-
-    Parameters
-    ----------
-    model : flopy model instance
-        flopy model
-    otfolder : str
-        output folder
-    package_names : list
-        list of package names to be exported
-    nanval : scalar
-        no data value, default value is -1e20
-    array2d : bool
-        True if array is 2d, default is False
-    smooth : bool
-        if True, will create smooth layer elevations, default is False
-    point_scalars : bool
-        if True, will also output array values at cell vertices, default is
-        False; note this automatically sets smooth to True
-    vtk_grid_type : str
-        Specific vtk_grid_type or 'auto' (default). Possible specific values
-        are 'ImageData', 'RectilinearGrid', and 'UnstructuredGrid'.
-        If 'auto', the grid type is automatically determined. Namely:
-            * A regular grid (in all three directions) will be saved as an
-              'ImageData'.
-            * A rectilinear (in all three directions), non-regular grid
-              will be saved as a 'RectilinearGrid'.
-            * Other grids will be saved as 'UnstructuredGrid'.
-    true2d : bool
-        If True, the model is expected to be 2d (1 layer, 1 row or 1 column)
-        and the data will be exported as true 2d data, default is False.
-    binary : bool
-        if True the output file will be binary, default is False
-    kpers : iterable of int
-        Stress periods to export. If None (default), all stress periods will be
-        exported.
-    """
-    warnings.warn("export_model is deprecated, please use Vtk.add_model()")
-
-    if nanval != -1e20:
-        warnings.warn("nanval is deprecated, setting to np.nan")
-    if true2d:
-        warnings.warn("true2d is no longer supported, setting to False")
-    if vtk_grid_type != "auto":
-        warnings.warn("vtk_grid_type is deprecated, setting to binary")
-
-    vtk = Vtk(
-        model,
-        vertical_exageration=1,
-        binary=binary,
-        smooth=smooth,
-        point_scalars=point_scalars,
-    )
-
-    vtk.add_model(model, package_names)
-
-    if not os.path.exists(otfolder):
-        os.mkdir(otfolder)
-
-    name = model.name
-    vtk.write(os.path.join(otfolder, name), kper=kpers)
-
-
-def export_package(
-    pak_model,
-    pak_name,
-    otfolder,
-    vtkobj=None,
-    nanval=-1e20,
-    smooth=False,
-    point_scalars=False,
-    vtk_grid_type="auto",
-    true2d=False,
-    binary=True,
-    kpers=None,
-):
-    """
-    Export package to vtk
-
-    .. deprecated:: 3.3.5
-        Use :meth:`Vtk.add_package`
-
-    Parameters
-    ----------
-    pak_model : flopy model instance
-        the model of the package
-    pak_name : str
-        the name of the package
-    otfolder : str
-        output folder to write the data
-    vtkobj : VTK instance
-        a vtk object (allows export_package to be called from
-        export_model)
-    nanval : scalar
-        no data value, default value is -1e20
-    smooth : bool
-        if True, will create smooth layer elevations, default is False
-    point_scalars : bool
-        if True, will also output array values at cell vertices, default is
-        False; note this automatically sets smooth to True
-    vtk_grid_type : str
-        Specific vtk_grid_type or 'auto' (default). Possible specific values
-        are 'ImageData', 'RectilinearGrid', and 'UnstructuredGrid'.
-        If 'auto', the grid type is automatically determined. Namely:
-            * A regular grid (in all three directions) will be saved as an
-              'ImageData'.
-            * A rectilinear (in all three directions), non-regular grid
-              will be saved as a 'RectilinearGrid'.
-            * Other grids will be saved as 'UnstructuredGrid'.
-    true2d : bool
-        If True, the model is expected to be 2d (1 layer, 1 row or 1 column)
-        and the data will be exported as true 2d data, default is False.
-    binary : bool
-        if True the output file will be binary, default is False
-    kpers : iterable of int
-        Stress periods to export. If None (default), all stress periods will be
-        exported.
-    """
-    warnings.warn("export_package is deprecated, use Vtk.add_package()")
-
-    if nanval != -1e20:
-        warnings.warn("nanval is deprecated, setting to np.nan")
-    if true2d:
-        warnings.warn("true2d is no longer supported, setting to False")
-    if vtk_grid_type != "auto":
-        warnings.warn("vtk_grid_type is deprecated, setting to binary")
-
-    if not vtkobj:
-        vtk = Vtk(
-            pak_model,
-            binary=binary,
-            smooth=smooth,
-            point_scalars=point_scalars,
-        )
-    else:
-        vtk = vtkobj
-
-    if not os.path.exists(otfolder):
-        os.mkdir(otfolder)
-
-    if isinstance(pak_name, list):
-        pak_name = pak_name[0]
-
-    p = pak_model.get_package(pak_name)
-    vtk.add_package(p)
-
-    vtk.write(os.path.join(otfolder, pak_name), kper=kpers)
-
-
-def export_transient(
-    model,
-    array,
-    output_folder,
-    name,
-    nanval=-1e20,
-    array2d=False,
-    smooth=False,
-    point_scalars=False,
-    vtk_grid_type="auto",
-    true2d=False,
-    binary=True,
-    kpers=None,
-):
-    """
-    Export transient arrays and lists to vtk
-
-    .. deprecated:: 3.3.5
-        Use :meth:`Vtk.add_transient_array` or :meth:`Vtk.add_transient_list`
-
-    Parameters
-    ----------
-    model : MFModel
-        the flopy model instance
-    array : Transient instance
-        flopy transient array
-    output_folder : str
-        output folder to write the data
-    name : str
-        name of array
-    nanval : scalar
-        no data value, default value is -1e20
-    array2d : bool
-        True if array is 2d, default is False
-    smooth : bool
-        if True, will create smooth layer elevations, default is False
-    point_scalars : bool
-        if True, will also output array values at cell vertices, default is
-        False; note this automatically sets smooth to True
-    vtk_grid_type : str
-        Specific vtk_grid_type or 'auto' (default). Possible specific values
-        are 'ImageData', 'RectilinearGrid', and 'UnstructuredGrid'.
-        If 'auto', the grid type is automatically determined. Namely:
-            * A regular grid (in all three directions) will be saved as an
-              'ImageData'.
-            * A rectilinear (in all three directions), non-regular grid
-              will be saved as a 'RectilinearGrid'.
-            * Other grids will be saved as 'UnstructuredGrid'.
-    true2d : bool
-        If True, the model is expected to be 2d (1 layer, 1 row or 1 column)
-        and the data will be exported as true 2d data, default is False.
-    binary : bool
-        if True the output file will be binary, default is False
-    kpers : iterable of int
-        Stress periods to export. If None (default), all stress periods will be
-        exported.
-    """
-    warnings.warn(
-        "export_transient is deprecated, use Vtk.add_transient_array() or "
-        "Vtk.add_transient_list()"
-    )
-
-    if nanval != -1e20:
-        warnings.warn("nanval is deprecated, setting to np.nan")
-    if true2d:
-        warnings.warn("true2d is no longer supported, setting to False")
-    if vtk_grid_type != "auto":
-        warnings.warn("vtk_grid_type is deprecated, setting to binary")
-    if array2d:
-        warnings.warn(
-            "array2d parameter is deprecated, 2d arrays are "
-            "handled automatically"
-        )
-
-    if not os.path.exists(output_folder):
-        os.mkdir(output_folder)
-
-    vtk = Vtk(model, binary=binary, smooth=smooth, point_scalars=point_scalars)
-
-    if array.data_type == DataType.transient2d:
-        if array.array is not None:
-            if hasattr(array, "transient_2ds"):
-                vtk.add_transient_array(array.transient_2ds, name)
-            else:
-                d = {ix: i for ix, i in enumerate(array.array)}
-                vtk.add_transient_array(d, name)
-
-    elif array.data_type == DataType.transient3d:
-        if array.array is None:
-            vtk.add_transient_array(array.transient_3ds, name)
-
-    elif array.data_type == DataType.transientlist:
-        vtk.add_transient_list(array)
-
-    else:
-        raise TypeError(f"type {type(array)} not valid for export_transient")
-
-    vtk.write(os.path.join(output_folder, name), kper=kpers)
-
-
-def export_array(
-    model,
-    array,
-    output_folder,
-    name,
-    nanval=-1e20,
-    array2d=False,
-    smooth=False,
-    point_scalars=False,
-    vtk_grid_type="auto",
-    true2d=False,
-    binary=True,
-):
-    """
-    Export array to vtk
-
-    .. deprecated:: 3.3.5
-        Use :meth:`Vtk.add_array`
-
-    Parameters
-    ----------
-    model : flopy model instance
-        the flopy model instance
-    array : flopy array
-        flopy 2d or 3d array
-    output_folder : str
-        output folder to write the data
-    name : str
-        name of array
-    nanval : scalar
-        no data value, default value is -1e20
-    array2d : bool
-        true if the array is 2d and represents the first layer, default is
-        False
-    smooth : bool
-        if True, will create smooth layer elevations, default is False
-    point_scalars : bool
-        if True, will also output array values at cell vertices, default is
-        False; note this automatically sets smooth to True
-    vtk_grid_type : str
-        Specific vtk_grid_type or 'auto' (default). Possible specific values
-        are 'ImageData', 'RectilinearGrid', and 'UnstructuredGrid'.
-        If 'auto', the grid type is automatically determined. Namely:
-            * A regular grid (in all three directions) will be saved as an
-              'ImageData'.
-            * A rectilinear (in all three directions), non-regular grid
-              will be saved as a 'RectilinearGrid'.
-            * Other grids will be saved as 'UnstructuredGrid'.
-    true2d : bool
-        If True, the model is expected to be 2d (1 layer, 1 row or 1 column)
-        and the data will be exported as true 2d data, default is False.
-    binary : bool
-        if True the output file will be binary, default is False
-    """
-    warnings.warn("export_array is deprecated, please use Vtk.add_array()")
-
-    if nanval != -1e20:
-        warnings.warn("nanval is deprecated, setting to np.nan")
-    if true2d:
-        warnings.warn("true2d is no longer supported, setting to False")
-    if vtk_grid_type != "auto":
-        warnings.warn("vtk_grid_type is deprecated, setting to binary")
-    if array2d:
-        warnings.warn(
-            "array2d parameter is deprecated, 2d arrays are "
-            "handled automatically"
-        )
-
-    if not os.path.exists(output_folder):
-        os.mkdir(output_folder)
-
-    if array.size < model.modelgrid.nnodes:
-        if array.size < model.modelgrid.ncpl:
-            raise AssertionError(
-                "Array size must be equal to either ncpl or nnodes"
-            )
-
-        array = np.zeros(model.modelgrid.nnodes) * np.nan
-        array[: array.size] = np.ravel(array)
-
-    vtk = Vtk(model, binary=binary, smooth=smooth, point_scalars=point_scalars)
-
-    vtk.add_array(array, name)
-    vtk.write(os.path.join(output_folder, name))
-
-
-def export_heads(
-    model,
-    hdsfile,
-    otfolder,
-    text="head",
-    precision="auto",
-    verbose=False,
-    nanval=-1e20,
-    kstpkper=None,
-    smooth=False,
-    point_scalars=False,
-    vtk_grid_type="auto",
-    true2d=False,
-    binary=True,
-):
-    """
-    Exports binary head file to vtk
-
-    .. deprecated:: 3.3.5
-        Use :meth:`Vtk.add_heads`
-
-    Parameters
-    ----------
-    model : MFModel
-        the flopy model instance
-    hdsfile : str, HeadFile object
-        binary head file path or object
-    otfolder : str
-        output folder to write the data
-    text : string
-        Name of the text string in the head file.  Default is 'head'.
-    precision : str
-        Precision of data in the head file: 'auto', 'single' or 'double'.
-        Default is 'auto'.
-    verbose : bool
-        If True, write information to the screen. Default is False.
-    nanval : scalar
-        no data value, default value is -1e20
-    kstpkper : tuple of ints or list of tuple of ints
-        A tuple containing the time step and stress period (kstp, kper).
-        The kstp and kper values are zero based.
-    smooth : bool
-        if True, will create smooth layer elevations, default is False
-    point_scalars : bool
-        if True, will also output array values at cell vertices, default is
-        False; note this automatically sets smooth to True
-    vtk_grid_type : str
-        Specific vtk_grid_type or 'auto' (default). Possible specific values
-        are 'ImageData', 'RectilinearGrid', and 'UnstructuredGrid'.
-        If 'auto', the grid type is automatically determined. Namely:
-            * A regular grid (in all three directions) will be saved as an
-              'ImageData'.
-            * A rectilinear (in all three directions), non-regular grid
-              will be saved as a 'RectilinearGrid'.
-            * Other grids will be saved as 'UnstructuredGrid'.
-    true2d : bool
-        If True, the model is expected to be 2d (1 layer, 1 row or 1 column)
-        and the data will be exported as true 2d data, default is False.
-    binary : bool
-        if True the output file will be binary, default is False
-    """
-    warnings.warn("export_heads is deprecated, use Vtk.add_heads()")
-
-    if nanval != -1e20:
-        warnings.warn("nanval is deprecated, setting to np.nan")
-    if true2d:
-        warnings.warn("true2d is no longer supported, setting to False")
-    if vtk_grid_type != "auto":
-        warnings.warn("vtk_grid_type is deprecated, setting to binary")
-
-    from ..utils import HeadFile
-
-    if not os.path.exists(otfolder):
-        os.mkdir(otfolder)
-
-    if not isinstance(hdsfile, HeadFile):
-        hds = HeadFile(
-            hdsfile, text=text, precision=precision, verbose=verbose
-        )
-    else:
-        hds = hdsfile
-
-    vtk = Vtk(model, binary=binary, smooth=smooth, point_scalars=point_scalars)
-
-    vtk.add_heads(hds, kstpkper)
-    name = f"{model.name}_{text}"
-    vtk.write(os.path.join(otfolder, name))
-
-
-def export_cbc(
-    model,
-    cbcfile,
-    otfolder,
-    precision="single",
-    verbose=False,
-    nanval=-1e20,
-    kstpkper=None,
-    text=None,
-    smooth=False,
-    point_scalars=False,
-    vtk_grid_type="auto",
-    true2d=False,
-    binary=True,
-):
-    """
-    Exports cell by cell file to vtk
-
-    .. deprecated:: 3.3.5
-        Use :meth:`Vtk.add_cell_budget`
-
-    Parameters
-    ----------
-    model : flopy model instance
-        the flopy model instance
-    cbcfile : str
-        the cell by cell file
-    otfolder : str
-        output folder to write the data
-    precision : str
-        Precision of data in the cell by cell file: 'single' or 'double'.
-        Default is 'single'.
-    verbose : bool
-        If True, write information to the screen. Default is False.
-    nanval : scalar
-        no data value
-    kstpkper : tuple of ints or list of tuple of ints
-        A tuple containing the time step and stress period (kstp, kper).
-        The kstp and kper values are zero based.
-    text : str or list of str
-        The text identifier for the record.  Examples include
-        'RIVER LEAKAGE', 'STORAGE', 'FLOW RIGHT FACE', etc.
-    smooth : bool
-        if True, will create smooth layer elevations, default is False
-    point_scalars : bool
-        if True, will also output array values at cell vertices, default is
-        False; note this automatically sets smooth to True
-    vtk_grid_type : str
-        Specific vtk_grid_type or 'auto' (default). Possible specific values
-        are 'ImageData', 'RectilinearGrid', and 'UnstructuredGrid'.
-        If 'auto', the grid type is automatically determined. Namely:
-            * A regular grid (in all three directions) will be saved as an
-              'ImageData'.
-            * A rectilinear (in all three directions), non-regular grid
-              will be saved as a 'RectilinearGrid'.
-            * Other grids will be saved as 'UnstructuredGrid'.
-    true2d : bool
-        If True, the model is expected to be 2d (1 layer, 1 row or 1 column)
-        and the data will be exported as true 2d data, default is False.
-    binary : bool
-        if True the output file will be binary, default is False
-    """
-    warnings.warn("export_cbc is deprecated, use Vtk.add_cell_budget()")
-
-    if nanval != -1e20:
-        warnings.warn("nanval is deprecated, setting to np.nan")
-    if true2d:
-        warnings.warn("true2d is no longer supported, setting to False")
-    if vtk_grid_type != "auto":
-        warnings.warn("vtk_grid_type is deprecated, setting to binary")
-
-    from ..utils import CellBudgetFile
-
-    if not os.path.exists(otfolder):
-        os.mkdir(otfolder)
-
-    if not isinstance(cbcfile, CellBudgetFile):
-        cbc = CellBudgetFile(cbcfile, precision=precision, verbose=verbose)
-    else:
-        cbc = cbcfile
-
-    vtk = Vtk(model, binary=binary, smooth=smooth, point_scalars=point_scalars)
-
-    vtk.add_cell_budget(cbc, text, kstpkper)
-    fname = f"{model.name}_CBC"
-    vtk.write(os.path.join(otfolder, fname))

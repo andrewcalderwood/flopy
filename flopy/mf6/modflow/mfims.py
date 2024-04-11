@@ -1,6 +1,6 @@
 # DO NOT MODIFY THIS FILE DIRECTLY.  THIS FILE MUST BE CREATED BY
 # mf6/utils/createpackages.py
-# FILE created on December 15, 2022 12:49:36 UTC
+# FILE created on February 07, 2024 20:16:08 UTC
 from .. import mfpackage
 from ..data.mfdatautil import ListTemplateGenerator
 
@@ -381,6 +381,7 @@ class ModflowIms(mfpackage.MFPackage):
     dfn = [
         [
             "header",
+            ["solution_package", "*"],
         ],
         [
             "block options",

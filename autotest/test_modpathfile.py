@@ -1,11 +1,13 @@
 import inspect
 import io
 import pstats
+from itertools import repeat
 from shutil import copytree
 
 import numpy as np
+import numpy.lib.recfunctions as rfn
 import pytest
-from modflow_devtools.markers import requires_exe
+from modflow_devtools.markers import requires_exe, requires_pkg
 
 from flopy.mf6 import (
     MFSimulation,
@@ -26,7 +28,7 @@ from flopy.utils import EndpointFile, PathlineFile
 pytestmark = pytest.mark.mf6
 
 
-def __create_simulation(
+def __create_and_run_simulation(
     ws,
     name,
     nrow,
@@ -66,7 +68,7 @@ def __create_simulation(
     )
 
     # Create the Flopy groundwater flow (gwf) model object
-    model_nam_file = "{}.nam".format(name)
+    model_nam_file = f"{name}.nam"
     gwf = ModflowGwf(
         sim, modelname=name, model_nam_file=model_nam_file, save_flows=True
     )
@@ -113,9 +115,9 @@ def __create_simulation(
     ModflowGwfriv(gwf, stress_period_data={0: rd})
 
     # Create the output control package
-    headfile = "{}.hds".format(name)
+    headfile = f"{name}.hds"
     head_record = [headfile]
-    budgetfile = "{}.cbb".format(name)
+    budgetfile = f"{name}.cbb"
     budget_record = [budgetfile]
     saverecord = [("HEAD", "ALL"), ("BUDGET", "ALL")]
     oc = ModflowGwfoc(
@@ -181,8 +183,8 @@ def __create_simulation(
 
 @pytest.fixture(scope="module")
 def mp7_small(module_tmpdir):
-    return __create_simulation(
-        ws=str(module_tmpdir / "mp7_small"),
+    return __create_and_run_simulation(
+        ws=module_tmpdir / "mp7_small",
         name="mp7_small",
         nper=1,
         nstp=1,
@@ -209,8 +211,8 @@ def mp7_small(module_tmpdir):
 
 @pytest.fixture(scope="module")
 def mp7_large(module_tmpdir):
-    return __create_simulation(
-        ws=str(module_tmpdir / "mp7_large"),
+    return __create_and_run_simulation(
+        ws=module_tmpdir / "mp7_large",
         name="mp7_large",
         nper=1,
         nstp=1,
@@ -243,12 +245,12 @@ def test_pathline_file_sorts_in_ctor(
     ws = function_tmpdir / "ws"
 
     # copytree(sim.simulation_data.mfpath.get_sim_path(), ws)
-    copytree(str(module_tmpdir / "mp7_small"), ws)
+    copytree(module_tmpdir / "mp7_small", ws)
 
     forward_path = ws / f"{forward_model_name}.mppth"
     assert forward_path.is_file()
 
-    pathline_file = PathlineFile(str(forward_path))
+    pathline_file = PathlineFile(forward_path)
     assert np.all(
         pathline_file._data[:-1]["particleid"]
         <= pathline_file._data[1:]["particleid"]
@@ -273,7 +275,7 @@ def test_get_destination_pathline_data(
     assert backward_path.is_file()
 
     pathline_file = PathlineFile(
-        str(backward_path) if direction == "backward" else str(forward_path)
+        backward_path if direction == "backward" else forward_path
     )
     benchmark(
         lambda: pathline_file.get_destination_pathline_data(
@@ -300,10 +302,63 @@ def test_get_destination_endpoint_data(
     assert backward_end.is_file()
 
     endpoint_file = EndpointFile(
-        str(backward_end) if direction == "backward" else str(forward_end)
+        backward_end if direction == "backward" else forward_end
     )
     benchmark(
         lambda: endpoint_file.get_destination_endpoint_data(
             dest_cells=nodew if locations == "well" else nodesr
         )
     )
+
+
+@pytest.mark.parametrize("longfieldname", [True, False])
+@requires_exe("mf6", "mp7")
+@requires_pkg("shapefile", "shapely")
+def test_write_shapefile(function_tmpdir, mp7_small, longfieldname):
+    from shapefile import Reader
+
+    # setup and run model, then copy outputs to function_tmpdir
+    sim, forward_model_name, _, _, _ = mp7_small
+    gwf = sim.get_model()
+    grid = gwf.modelgrid
+    ws = function_tmpdir / "ws"
+    copytree(sim.simulation_data.mfpath.get_sim_path(), ws)
+
+    # make sure forward model output exists
+    forward_path = ws / f"{forward_model_name}.mppth"
+    assert forward_path.is_file()
+
+    # load pathlines from file
+    pathline_file = PathlineFile(forward_path)
+    pathlines = pathline_file.get_alldata()
+
+    # define shapefile path
+    shp_file = ws / "pathlines.shp"
+
+    # add a column to the pathline recarray
+    fieldname = "newfield" + ("longname" if longfieldname else "")
+    fieldval = "x"
+    pathlines = [
+        rfn.append_fields(
+            pl, fieldname, list(repeat(fieldval, len(pl))), dtypes="|S1"
+        )
+        for pl in pathlines
+    ]
+
+    # write the pathline recarray to shapefile
+    pathline_file.write_shapefile(
+        pathline_data=pathlines,
+        shpname=shp_file,
+        one_per_particle=False,
+        mg=grid,
+    )
+
+    # make sure shapefile exists
+    assert shp_file.is_file()
+
+    # load shapefile
+    with Reader(shp_file) as reader:
+        fieldnames = [f[0] for f in reader.fields[1:]]
+        fieldname = "newfiname_" if longfieldname else fieldname
+        assert fieldname in fieldnames
+        assert all(r[fieldname] == fieldval for r in reader.iterRecords())

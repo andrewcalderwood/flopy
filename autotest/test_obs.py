@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 from modflow_devtools.markers import requires_exe
 
+import flopy
 from flopy.modflow import (
     HeadObservation,
     Modflow,
@@ -25,7 +26,7 @@ def test_hob_simple(function_tmpdir):
     test041 create and run a simple MODFLOW-2005 OBS example
     """
     modelname = "hob_simple"
-    ws = str(function_tmpdir)
+    ws = function_tmpdir
     nlay, nrow, ncol = 1, 11, 11
     shape3d = (nlay, nrow, ncol)
     shape2d = (nrow, ncol)
@@ -112,14 +113,14 @@ def test_obs_load_and_write(function_tmpdir, example_data_path):
     test041 load and write of MODFLOW-2005 OBS example problem
     """
 
-    pth = str(example_data_path / "mf2005_obs")
-    ws = str(function_tmpdir)
+    pth = example_data_path / "mf2005_obs"
+    ws = function_tmpdir
 
     # copy the original files
     files = os.listdir(pth)
     for file in files:
-        src = os.path.join(pth, file)
-        dst = os.path.join(ws, file)
+        src = pth / file
+        dst = ws / file
         shutil.copyfile(src, dst)
 
     # load the modflow model
@@ -254,7 +255,7 @@ def test_obs_single_time(function_tmpdir):
     test reading a mf6 observation file with a single time
     """
 
-    pth = str(function_tmpdir / "single.csv")
+    pth = function_tmpdir / "single.csv"
     with open(pth, "w") as file:
         file.write("time,obs01,obs02\n1.0,10.0,20.0\n")
 
@@ -273,14 +274,14 @@ def test_obs_create_and_write(function_tmpdir, example_data_path):
     test041 create and write of MODFLOW-2005 OBS example problem
     """
 
-    pth = str(example_data_path / "mf2005_obs")
-    ws = str(function_tmpdir)
+    pth = example_data_path / "mf2005_obs"
+    ws = function_tmpdir
 
     # copy the original files
     files = os.listdir(pth)
     for file in files:
-        src = os.path.join(pth, file)
-        dst = os.path.join(ws, file)
+        src = pth / file
+        dst = ws / file
         shutil.copyfile(src, dst)
 
     # load the modflow model
@@ -444,3 +445,46 @@ def test_multilayerhob_pr_multiline():
     hob = ModflowHob.load(StringIO(problem_hob), ml)
 
     assert len(hob.obs_data) == 2, "pr, mlay... load error"
+
+
+def test_duplicate_observation_names(function_tmpdir):
+    sim_ws = function_tmpdir
+    sim = flopy.mf6.MFSimulation(sim_ws=sim_ws)
+
+    tdis = flopy.mf6.ModflowTdis(sim)
+    ims = flopy.mf6.ModflowIms(sim)
+
+    gwf = flopy.mf6.ModflowGwf(sim)
+
+    nlay = 2
+    nrow = 10
+    ncol = 10
+    top = 10
+    botm = [0, -10]
+
+    dis = flopy.mf6.ModflowGwfdis(
+        gwf, nlay=nlay, nrow=nrow, ncol=ncol, top=top, botm=botm
+    )
+    ic = flopy.mf6.ModflowGwfic(gwf, strt=top)
+    npf = flopy.mf6.ModflowGwfnpf(gwf, k=1, k33=1)
+    sto = flopy.mf6.ModflowGwfsto(gwf)
+    obs = flopy.mf6.ModflowUtlobs(
+        gwf,
+        continuous={
+            "repeat_obs.csv": [
+                ("obsdup", "HEAD", (0, 4, 4)),
+                ("obsdup", "HEAD", (1, 4, 4)),
+            ]
+        },
+    )
+
+    spd = {0: [((1, 4, 4), -50.0)]}
+    wel = flopy.mf6.ModflowGwfwel(gwf, stress_period_data=spd)
+    sim.write_simulation()
+    sim.run_simulation()
+
+    gwf = sim.get_model()
+    obs = gwf.obs.output.obs()
+    data = obs.get_data()
+    if len(data.dtype.names) != 3:
+        raise AssertionError("CsvFile not incrementing duplicate headings")
