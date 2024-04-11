@@ -146,7 +146,6 @@ class Mt3dUzt(Package):
         filenames=None,
         **kwargs,
     ):
-
         # set default unit number of one is not specified
         if unitnumber is None:
             unitnumber = Mt3dUzt._defaultunit()
@@ -340,7 +339,7 @@ class Mt3dUzt(Package):
         # (Loop through each stress period and write uzt information)
         nper = self.parent.nper
         for kper in range(nper):
-            if f_uzt.closed == True:
+            if f_uzt.closed:
                 f_uzt = open(f_uzt.name, "a")
 
             # Concentrations associated with distributed stresses (Infil, ET)
@@ -554,7 +553,6 @@ class Mt3dUzt(Package):
 
         # Start of transient data
         for iper in range(nper):
-
             if model.verbose:
                 print(f"   loading UZT data for kper {iper + 1:5d}")
 

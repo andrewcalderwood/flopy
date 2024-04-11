@@ -14,7 +14,7 @@ from flopy.utils import Raster
 from flopy.utils.gridintersect import GridIntersect
 from flopy.utils.triangle import Triangle
 
-if has_pkg("shapely"):
+if has_pkg("shapely", strict=True):
     from shapely.geometry import (
         LineString,
         MultiLineString,
@@ -426,6 +426,22 @@ def test_rect_grid_multilinestring_in_one_cell():
 
 
 @requires_pkg("shapely")
+def test_rect_grid_multilinestring_in_multiple_cells():
+    gr = get_rect_grid()
+    ix = GridIntersect(gr, method="structured")
+    result = ix.intersect(
+        MultiLineString(
+            [
+                LineString([(20.0, 0.0), (7.5, 12.0), (2.5, 7.0), (0.0, 4.5)]),
+                LineString([(5.0, 19.0), (2.5, 7.0)]),
+            ]
+        )
+    )
+    assert len(result) == 3
+    assert np.allclose(sum(result.lengths), 40.19197584109293)
+
+
+@requires_pkg("shapely")
 def test_rect_grid_linestring_in_and_out_of_cell():
     gr = get_rect_grid()
     ix = GridIntersect(gr, method="structured")
@@ -535,6 +551,23 @@ def test_rect_grid_multilinestring_in_one_cell_shapely(rtree):
     assert len(result) == 1
     assert result.lengths == 16.0
     assert result.cellids[0] == (1, 0)
+
+
+@requires_pkg("shapely")
+@rtree_toggle
+def test_rect_grid_multilinestring_in_multiple_cells_shapely(rtree):
+    gr = get_rect_grid()
+    ix = GridIntersect(gr, method="vertex", rtree=rtree)
+    result = ix.intersect(
+        MultiLineString(
+            [
+                LineString([(20.0, 0.0), (7.5, 12.0), (2.5, 7.0), (0.0, 4.5)]),
+                LineString([(5.0, 19.0), (2.5, 7.0)]),
+            ]
+        )
+    )
+    assert len(result) == 3
+    assert np.allclose(sum(result.lengths), 40.19197584109293)
 
 
 @requires_pkg("shapely")
@@ -657,6 +690,25 @@ def test_tri_grid_multilinestring_in_one_cell(rtree):
 
 @requires_pkg("shapely")
 @rtree_toggle
+def test_tri_grid_multilinestring_in_multiple_cells(rtree):
+    gr = get_tri_grid()
+    if gr == -1:
+        return
+    ix = GridIntersect(gr, rtree=rtree)
+    result = ix.intersect(
+        MultiLineString(
+            [
+                LineString([(20.0, 0.0), (7.5, 12.0), (2.5, 7.0), (0.0, 4.5)]),
+                LineString([(5.0, 19.0), (2.5, 7.0)]),
+            ]
+        )
+    )
+    assert len(result) == 5
+    assert np.allclose(sum(result.lengths), 40.19197584109293)
+
+
+@requires_pkg("shapely")
+@rtree_toggle
 def test_tri_grid_linestrings_on_boundaries_return_all_ix(rtree):
     tgr = get_tri_grid()
     ix = GridIntersect(tgr, method="vertex", rtree=rtree)
@@ -754,6 +806,7 @@ def test_rect_grid_polygon_on_inner_boundary():
     # plt.show()
 
 
+@requires_pkg("shapely")
 def test_rect_grid_polygon_multiple_polygons():
     gr = get_rect_grid()
     p = Polygon(
@@ -1152,6 +1205,10 @@ def test_point_offset_rot_structured_grid():
     ix = GridIntersect(sgr, method="structured")
     result = ix.intersect(p)
     assert len(result) == 1
+    # check empty result when using local model coords
+    ix = GridIntersect(sgr, method="structured", local=True)
+    result = ix.intersect(p)
+    assert len(result) == 0
 
 
 @requires_pkg("shapely")
@@ -1160,8 +1217,11 @@ def test_linestring_offset_rot_structured_grid():
     ls = LineString([(5, 10.0 + np.sqrt(200.0)), (15, 10.0 + np.sqrt(200.0))])
     ix = GridIntersect(sgr, method="structured")
     result = ix.intersect(ls)
-    # NOTE: in shapely 2.0, this returns a Linestring with length 10^-15 in cell (0, 1)
-    assert len(result) == 2 or len(result) == 3
+    assert len(result) == 2
+    # check empty result when using local model coords
+    ix = GridIntersect(sgr, method="structured", local=True)
+    result = ix.intersect(ls)
+    assert len(result) == 0
 
 
 @requires_pkg("shapely")
@@ -1178,6 +1238,10 @@ def test_polygon_offset_rot_structured_grid():
     ix = GridIntersect(sgr, method="structured")
     result = ix.intersect(p)
     assert len(result) == 3
+    # check empty result when using local model coords
+    ix = GridIntersect(sgr, method="structured", local=True)
+    result = ix.intersect(p)
+    assert len(result) == 0
 
 
 @requires_pkg("shapely")
@@ -1188,6 +1252,10 @@ def test_point_offset_rot_structured_grid_shapely(rtree):
     ix = GridIntersect(sgr, method="vertex", rtree=rtree)
     result = ix.intersect(p)
     assert len(result) == 1
+    # check empty result when using local model coords
+    ix = GridIntersect(sgr, method="vertex", rtree=rtree, local=True)
+    result = ix.intersect(p)
+    assert len(result) == 0
 
 
 @requires_pkg("shapely")
@@ -1198,6 +1266,10 @@ def test_linestring_offset_rot_structured_grid_shapely(rtree):
     ix = GridIntersect(sgr, method="vertex", rtree=rtree)
     result = ix.intersect(ls)
     assert len(result) == 2
+    # check empty result when using local model coords
+    ix = GridIntersect(sgr, method="vertex", rtree=rtree, local=True)
+    result = ix.intersect(ls)
+    assert len(result) == 0
 
 
 @requires_pkg("shapely")
@@ -1215,17 +1287,70 @@ def test_polygon_offset_rot_structured_grid_shapely(rtree):
     ix = GridIntersect(sgr, method="vertex", rtree=rtree)
     result = ix.intersect(p)
     assert len(result) == 3
+    # check empty result when using local model coords
+    ix = GridIntersect(sgr, method="vertex", rtree=rtree, local=True)
+    result = ix.intersect(p)
+    assert len(result) == 0
+
+
+@requires_pkg("shapely")
+@rtree_toggle
+def test_point_offset_rot_vertex_grid_shapely(rtree):
+    sgr = get_rect_vertex_grid(angrot=45.0, xyoffset=10.0)
+    p = Point(10.0, 10 + np.sqrt(200.0))
+    ix = GridIntersect(sgr, method="vertex", rtree=rtree)
+    result = ix.intersect(p)
+    assert len(result) == 1
+    # check empty result when using local model coords
+    ix = GridIntersect(sgr, method="vertex", rtree=rtree, local=True)
+    result = ix.intersect(p)
+    assert len(result) == 0
+
+
+@requires_pkg("shapely")
+@rtree_toggle
+def test_linestring_offset_rot_vertex_grid_shapely(rtree):
+    sgr = get_rect_vertex_grid(angrot=45.0, xyoffset=10.0)
+    ls = LineString([(5, 10.0 + np.sqrt(200.0)), (15, 10.0 + np.sqrt(200.0))])
+    ix = GridIntersect(sgr, method="vertex", rtree=rtree)
+    result = ix.intersect(ls)
+    assert len(result) == 2
+    # check empty result when using local model coords
+    ix = GridIntersect(sgr, method="vertex", rtree=rtree, local=True)
+    result = ix.intersect(ls)
+    assert len(result) == 0
+
+
+@requires_pkg("shapely")
+@rtree_toggle
+def test_polygon_offset_rot_vertex_grid_shapely(rtree):
+    sgr = get_rect_vertex_grid(angrot=45.0, xyoffset=10.0)
+    p = Polygon(
+        [
+            (5, 10.0 + np.sqrt(200.0)),
+            (15, 10.0 + np.sqrt(200.0)),
+            (15, 10.0 + 1.5 * np.sqrt(200.0)),
+            (5, 10.0 + 1.5 * np.sqrt(200.0)),
+        ]
+    )
+    ix = GridIntersect(sgr, method="vertex", rtree=rtree)
+    result = ix.intersect(p)
+    assert len(result) == 3
+    # check empty result when using local model coords
+    ix = GridIntersect(sgr, method="vertex", rtree=rtree, local=True)
+    result = ix.intersect(p)
+    assert len(result) == 0
 
 
 # %% test rasters
 
 
-@requires_pkg("rasterstats")
+@requires_pkg("rasterstats", "scipy", "shapely")
 def test_rasters(example_data_path):
-    ws = str(example_data_path / "options")
+    ws = example_data_path / "options"
     raster_name = "dem.img"
 
-    rio = Raster.load(os.path.join(ws, "dem", raster_name))
+    rio = Raster.load(ws / "dem" / raster_name)
 
     ml = Modflow.load(
         "sagehen.nam", version="mfnwt", model_ws=os.path.join(ws, "sagehen")
@@ -1284,14 +1409,12 @@ def test_rasters(example_data_path):
 @pytest.mark.slow
 @requires_pkg("rasterstats")
 def test_raster_sampling_methods(example_data_path):
-    ws = str(example_data_path / "options")
+    ws = example_data_path / "options"
     raster_name = "dem.img"
 
-    rio = Raster.load(os.path.join(ws, "dem", raster_name))
+    rio = Raster.load(ws / "dem" / raster_name)
 
-    ml = Modflow.load(
-        "sagehen.nam", version="mfnwt", model_ws=os.path.join(ws, "sagehen")
-    )
+    ml = Modflow.load("sagehen.nam", version="mfnwt", model_ws=ws / "sagehen")
     xoff = 214110
     yoff = 4366620
     ml.modelgrid.set_coord_info(xoff, yoff)
@@ -1327,3 +1450,14 @@ def test_raster_sampling_methods(example_data_path):
             raise AssertionError(
                 f"{method} resampling returning incorrect values"
             )
+
+
+if __name__ == "__main__":
+    sgr = get_rect_grid(angrot=45.0, xyoffset=10.0)
+    ls = LineString([(5, 10.0 + np.sqrt(200.0)), (15, 10.0 + np.sqrt(200.0))])
+    ix = GridIntersect(sgr, method="structured")
+    result = ix.intersect(ls)
+    assert len(result) == 2
+    ix = GridIntersect(sgr, method="structured", local=True)
+    result = ix.intersect(ls)
+    assert len(result) == 0

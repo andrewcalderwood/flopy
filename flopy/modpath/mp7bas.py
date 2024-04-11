@@ -2,6 +2,7 @@
 mp7bas module.  Contains the Modpath7Bas class.
 
 """
+
 import numpy as np
 
 from ..pakbase import Package
@@ -40,7 +41,6 @@ class Modpath7Bas(Package):
     def __init__(
         self, model, porosity=0.30, defaultiface=None, extension="mpbas"
     ):
-
         unitnumber = model.next_unit()
 
         super().__init__(model, extension, "MPBAS", unitnumber)

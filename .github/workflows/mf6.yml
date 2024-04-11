@@ -4,11 +4,6 @@ on:
   schedule:
     - cron: '0 8 * * *' # run at 8 AM UTC (12 am PST)
   push:
-    branches:
-      - master
-      - develop
-      - release*
-      - ci-diagnose*
   pull_request:
     branches:
       - master
@@ -27,10 +22,10 @@ jobs:
     steps:
 
     - name: Checkout flopy repo
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Setup Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: 3.9
         cache: 'pip'
@@ -44,11 +39,14 @@ jobs:
         pip install https://github.com/MODFLOW-USGS/modflowapi/zipball/develop
         pip install .[test,optional]
 
-    - name: Install gfortran
-      uses: modflowpy/install-gfortran-action@v1
+    - name: Setup GNU Fortran
+      uses: fortran-lang/setup-fortran@v1
+      with:
+        compiler: gcc
+        version: 13
 
     - name: Checkout MODFLOW 6
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         repository: MODFLOW-USGS/modflow6
         path: modflow6
@@ -79,13 +77,15 @@ jobs:
 
     - name: Get executables
       working-directory: modflow6/autotest
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
       run: |
         pytest -v --durations=0 get_exes.py
 
     - name: Run tests
       working-directory: modflow6/autotest
       run: |
-        pytest -v -n auto -k "test_gw" --durations=0 --cov=flopy --cov-report=xml
+        pytest -v --cov=flopy --cov-report=xml --durations=0 -n auto -m "not repo and not regression"
 
     - name: Print coverage report before upload
       working-directory: ./modflow6/autotest
@@ -93,7 +93,8 @@ jobs:
         coverage report
 
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v2.1.0
+      if:
+        github.repository_owner == 'modflowpy' && (github.event_name == 'push' || github.event_name == 'pull_request')
+      uses: codecov/codecov-action@v3
       with:
-        directory: ./modflow6/autotest
-        file: coverage.xml
+        files: ./modflow6/autotest/coverage.xml

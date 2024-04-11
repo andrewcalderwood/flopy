@@ -4,7 +4,7 @@ import subprocess
 import matplotlib.pyplot as plt
 import numpy as np
 
-from ..mbase import which
+from ..mbase import resolve_exe
 from ..utils.cvfdutil import centroid_of_polygon
 from ..utils.geospatial_utils import GeoSpatialUtil
 
@@ -51,18 +51,14 @@ class Triangle:
         additional_args=None,
     ):
         self.model_ws = model_ws
-        exe_name = which(exe_name)
-        if exe_name is None:
-            raise Exception("Cannot find triangle binary executable")
-        self.exe_name = os.path.abspath(exe_name)
+        self.exe_name = resolve_exe(exe_name)
         self.angle = angle
         self.maximum_area = maximum_area
         self._nodes = nodes
         self.additional_args = additional_args
         self._initialize_vars()
-        return
 
-    def add_polygon(self, polygon):
+    def add_polygon(self, polygon, ignore_holes=False):
         """
         Add a polygon
 
@@ -76,6 +72,9 @@ class Triangle:
             shapely Polygon object
             shapefile Polygon shape
             flopy.utils.geometry.Polygon object
+        ignore_holes : bool
+            method to ignore holes in polygon and only use the exterior
+            coordinates
 
         Returns
         -------
@@ -90,10 +89,10 @@ class Triangle:
         if polygon[0][0] == polygon[0][-1]:
             polygon[0] = polygon[0][:-1]
         self._polygons.append(polygon[0])
-        if len(polygon) > 1:
-            for hole in polygon[1:]:
-                self.add_hole(hole)
-        return
+        if not ignore_holes:
+            if len(polygon) > 1:
+                for hole in polygon[1:]:
+                    self.add_hole(hole)
 
     def add_hole(self, hole):
         """
@@ -110,7 +109,6 @@ class Triangle:
 
         """
         self._holes.append(hole)
-        return
 
     def add_region(self, point, attribute=0, maximum_area=None):
         """
@@ -134,7 +132,6 @@ class Triangle:
 
         """
         self._regions.append([point, attribute, maximum_area])
-        return
 
     def build(self, verbose=False):
         """
@@ -198,8 +195,6 @@ class Triangle:
         self.iverts = []
         for row in self.ele:
             self.iverts.append([row[1], row[2], row[3]])
-
-        return
 
     def plot(
         self,
@@ -323,7 +318,6 @@ class Triangle:
             y1 = self.node["y"][iv1]
             y2 = self.node["y"][iv2]
             ax.plot([x1, x2], [y1, y2], **kwargs)
-        return
 
     def plot_vertices(self, ax=None, **kwargs):
         """
@@ -345,7 +339,6 @@ class Triangle:
         if ax is None:
             ax = plt.gca()
         ax.plot(self.node["x"], self.node["y"], lw=0, **kwargs)
-        return
 
     def label_vertices(self, ax=None, onebased=True, **kwargs):
         """
@@ -377,7 +370,6 @@ class Triangle:
             if onebased:
                 s += 1
             ax.text(x, y, str(s), **kwargs)
-        return
 
     def plot_centroids(self, ax=None, **kwargs):
         """
@@ -400,7 +392,6 @@ class Triangle:
             ax = plt.gca()
         xcyc = self.get_xcyc()
         ax.plot(xcyc[:, 0], xcyc[:, 1], lw=0, **kwargs)
-        return
 
     def label_cells(self, ax=None, onebased=True, **kwargs):
         """
@@ -433,7 +424,6 @@ class Triangle:
             if onebased:
                 s += 1
             ax.text(x, y, str(s), **kwargs)
-        return
 
     def get_xcyc(self):
         """
@@ -603,7 +593,6 @@ class Triangle:
                 os.remove(fname)
                 if os.path.isfile(fname):
                     print(f"Could not remove: {fname}")
-        return
 
     def _initialize_vars(self):
         self.file_prefix = "_triangle"
@@ -616,17 +605,14 @@ class Triangle:
         self.verts = None
         self.iverts = None
         self.edgedict = None
-        return
 
     def _load_results(self):
-
         # node file
         ext = "node"
         dt = [("ivert", int), ("x", float), ("y", float)]
         fname = os.path.join(self.model_ws, f"{self.file_prefix}.1.{ext}")
         setattr(self, ext, None)
-        if os.path.isfile(fname):
-            f = open(fname, "r")
+        with open(fname, "r") as f:
             line = f.readline()
             f.close()
             ll = line.strip().split()
@@ -648,8 +634,7 @@ class Triangle:
         dt = [("icell", int), ("iv1", int), ("iv2", int), ("iv3", int)]
         fname = os.path.join(self.model_ws, f"{self.file_prefix}.1.{ext}")
         setattr(self, ext, None)
-        if os.path.isfile(fname):
-            f = open(fname, "r")
+        with open(fname, "r") as f:
             line = f.readline()
             f.close()
             ll = line.strip().split()
@@ -668,8 +653,7 @@ class Triangle:
         dt = [("iedge", int), ("endpoint1", int), ("endpoint2", int)]
         fname = os.path.join(self.model_ws, f"{self.file_prefix}.1.{ext}")
         setattr(self, ext, None)
-        if os.path.isfile(fname):
-            f = open(fname, "r")
+        with open(fname, "r") as f:
             line = f.readline()
             f.close()
             ll = line.strip().split()
@@ -691,8 +675,7 @@ class Triangle:
         ]
         fname = os.path.join(self.model_ws, f"{self.file_prefix}.1.{ext}")
         setattr(self, ext, None)
-        if os.path.isfile(fname):
-            f = open(fname, "r")
+        with open(fname, "r") as f:
             line = f.readline()
             f.close()
             ll = line.strip().split()
@@ -702,8 +685,6 @@ class Triangle:
             a = np.loadtxt(fname, skiprows=1, comments="#", dtype=dt)
             assert a.shape[0] == ncells
             setattr(self, ext, a)
-
-        return
 
     def _write_nodefile(self, fname):
         f = open(fname, "w")
@@ -731,7 +712,7 @@ class Triangle:
         f = open(fname, "w")
 
         # vertices, write zero to indicate read from node file
-        s = "{} {} {} {}\n".format(0, 0, 0, 0)
+        s = "0 0 0 0\n"
         f.write(s)
 
         # segments
@@ -780,7 +761,6 @@ class Triangle:
             f.write(s)
 
         f.close()
-        return
 
     def _create_edge_dict(self):
         """
@@ -793,4 +773,3 @@ class Triangle:
                 edgedict[(iv1, iv2)] = iseg
                 edgedict[(iv2, iv1)] = iseg
         self.edgedict = edgedict
-        return

@@ -7,6 +7,7 @@ MODFLOW Guide
 <https://water.usgs.gov/ogw/modflow-nwt/MODFLOW-NWT-Guide/pcg.html>`_.
 
 """
+
 from ..pakbase import Package
 from ..utils.flopy_io import line_parse
 
@@ -110,7 +111,6 @@ class ModflowPcg(Package):
         unitnumber=None,
         filenames=None,
     ):
-
         # set default unit number of one is not specified
         if unitnumber is None:
             unitnumber = ModflowPcg._defaultunit()

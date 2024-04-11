@@ -24,7 +24,7 @@ def get_benchmarks(paths):
     num_benchmarks = 0
 
     for path in paths:
-        with open(path, "r") as file:
+        with open(path) as file:
             jsn = json.load(file)
             system = jsn["machine_info"]["system"]
             python = jsn["machine_info"]["python_version"]
@@ -62,7 +62,7 @@ def get_benchmarks(paths):
 # create data frame and save to CSV
 benchmarks_df = pd.DataFrame(get_benchmarks(json_paths))
 benchmarks_df["time"] = pd.to_datetime(benchmarks_df["time"])
-benchmarks_df.to_csv(str(outdir / f"benchmarks.csv"), index=False)
+benchmarks_df.to_csv(str(outdir / "benchmarks.csv"), index=False)
 
 
 def matplotlib_plot(stats):

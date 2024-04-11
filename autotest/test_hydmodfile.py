@@ -1,6 +1,7 @@
 import os
 
 import numpy as np
+import pandas as pd
 import pytest
 from modflow_devtools.markers import requires_pkg
 from modflow_devtools.misc import has_pkg
@@ -20,10 +21,10 @@ def hydmod_model_path(example_data_path):
 
 
 def test_hydmodfile_create(function_tmpdir):
-    m = Modflow("test", model_ws=str(function_tmpdir))
+    m = Modflow("test", model_ws=function_tmpdir)
     hyd = ModflowHyd(m)
     m.hyd.write_file()
-    pth = str(function_tmpdir / "test.hyd")
+    pth = function_tmpdir / "test.hyd"
     hydload = ModflowHyd.load(pth, m)
     assert np.array_equal(
         hyd.obsdata, hydload.obsdata
@@ -55,17 +56,17 @@ def test_hydmodfile_create(function_tmpdir):
 def test_hydmodfile_load(function_tmpdir, hydmod_model_path):
     model = "test1tr.nam"
     m = Modflow.load(
-        model, version="mf2005", model_ws=str(hydmod_model_path), verbose=True
+        model, version="mf2005", model_ws=hydmod_model_path, verbose=True
     )
     hydref = m.hyd
     assert isinstance(
         hydref, ModflowHyd
     ), "Did not load hydmod package...test1tr.hyd"
 
-    m.change_model_ws(str(function_tmpdir))
+    m.change_model_ws(function_tmpdir)
     m.hyd.write_file()
 
-    pth = str(hydmod_model_path / "test1tr.hyd")
+    pth = hydmod_model_path / "test1tr.hyd"
     hydload = ModflowHyd.load(pth, m)
     assert np.array_equal(
         hydref.obsdata, hydload.obsdata
@@ -73,29 +74,21 @@ def test_hydmodfile_load(function_tmpdir, hydmod_model_path):
 
 
 def test_hydmodfile_read(hydmod_model_path):
-    pth = str(hydmod_model_path / "test1tr.hyd.gitbin")
+    pth = hydmod_model_path / "test1tr.hyd.gitbin"
     h = HydmodObs(pth)
     assert isinstance(h, HydmodObs)
 
     ntimes = h.get_ntimes()
-    assert ntimes == 101, "Not enough times in hydmod file ()...".format(
-        os.path.basename(pth)
-    )
+    assert ntimes == 101, "Not enough times in hydmod file ()...".format()
 
     times = h.get_times()
-    assert len(times) == 101, "Not enough times in hydmod file ()...".format(
-        os.path.basename(pth)
-    )
+    assert len(times) == 101, "Not enough times in hydmod file ()...".format()
 
     nitems = h.get_nobs()
-    assert nitems == 8, "Not enough records in hydmod file ()...".format(
-        os.path.basename(pth)
-    )
+    assert nitems == 8, "Not enough records in hydmod file ()...".format()
 
     labels = h.get_obsnames()
-    assert len(labels) == 8, "Not enough labels in hydmod file ()...".format(
-        os.path.basename(pth)
-    )
+    assert len(labels) == 8, "Not enough labels in hydmod file ()...".format()
     print(labels)
 
     for idx in range(ntimes):
@@ -118,37 +111,28 @@ def test_hydmodfile_read(hydmod_model_path):
         len(data.dtype.names) == nitems + 1
     ), f"data column length is not {len(nitems + 1)}"
 
-    if has_pkg("pandas"):
-        import pandas as pd
-
-        for idx in range(ntimes):
-            df = h.get_dataframe(idx=idx, timeunit="S")
-            assert isinstance(df, pd.DataFrame), "A DataFrame was not returned"
-            assert df.shape == (1, 9), "data shape is not (1, 9)"
-
-        for time in times:
-            df = h.get_dataframe(totim=time, timeunit="S")
-            assert isinstance(df, pd.DataFrame), "A DataFrame was not returned"
-            assert df.shape == (1, 9), "data shape is not (1, 9)"
-
-        df = h.get_dataframe(timeunit="S")
+    for idx in range(ntimes):
+        df = h.get_dataframe(idx=idx, timeunit="S")
         assert isinstance(df, pd.DataFrame), "A DataFrame was not returned"
-        assert df.shape == (101, 9), "data shape is not (101, 9)"
-    else:
-        print("pandas not available...")
-        pass
+        assert df.shape == (1, 9), "data shape is not (1, 9)"
+
+    for time in times:
+        df = h.get_dataframe(totim=time, timeunit="S")
+        assert isinstance(df, pd.DataFrame), "A DataFrame was not returned"
+        assert df.shape == (1, 9), "data shape is not (1, 9)"
+
+    df = h.get_dataframe(timeunit="S")
+    assert isinstance(df, pd.DataFrame), "A DataFrame was not returned"
+    assert df.shape == (101, 9), "data shape is not (101, 9)"
 
 
-@requires_pkg("pandas")
 def test_mf6obsfile_read(mf6_obs_model_path):
-    import pandas as pd
-
     txt = "binary mf6 obs"
     files = ["maw_obs.gitbin", "maw_obs.gitcsv"]
     binfile = [True, False]
 
     for idx in range(len(files)):
-        pth = str(mf6_obs_model_path / files[idx])
+        pth = mf6_obs_model_path / files[idx]
         h = Mf6Obs(pth, isBinary=binfile[idx])
         assert isinstance(h, Mf6Obs)
 

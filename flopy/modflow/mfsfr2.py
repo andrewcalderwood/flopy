@@ -5,10 +5,11 @@ import os
 import warnings
 
 import numpy as np
+import pandas as pd
 from numpy.lib import recfunctions
 
 from ..pakbase import Package
-from ..utils import MfList, import_optional_dependency
+from ..utils import MfList
 from ..utils.flopy_io import line_parse
 from ..utils.optionblock import OptionBlock
 from ..utils.recarray_utils import create_empty_recarray
@@ -67,14 +68,9 @@ class ModflowSfr2(Package):
         computing leakage between each stream reach and active model cell.
         Value is in units of length. Usually a value of 0.0001 is sufficient
         when units of feet or meters are used in model.
-    ipakcb : integer
-        An integer value used as a flag for writing stream-aquifer leakage
-        values. If ipakcb > 0, unformatted leakage between each stream reach
-        and corresponding model cell will be saved to the main cell-by-cell
-        budget file whenever when a cell-by-cell budget has been specified in
-        Output Control (see Harbaugh and others, 2000, pages 52-55). If
-        ipakcb = 0, leakage values will not be printed or saved. Printing to
-        the listing file (ipakcb < 0) is not supported.
+    ipakcb : int, optional
+        Toggles whether cell-by-cell budget data should be saved. If None or zero,
+        budget data will not be saved (default is None).
     istcb2 : integer
         An integer value used as a flag for writing to a separate formatted
         file all information on inflows and outflows from each reach; on
@@ -171,16 +167,26 @@ class ModflowSfr2(Package):
         simulations (and would need to be converted to whatever units are being
         used in the particular simulation). (default is 0.0001; for
         MODFLOW-2005 simulations only when irtflg > 0)
-    reach_data : recarray
+    reach_data : recarray or dataframe
         Numpy record array of length equal to nstrm, with columns for each
         variable entered in item 2 (see SFR package input instructions). In
         following flopy convention, layer, row, column and node number
         (for unstructured grids) are zero-based; segment and reach are
         one-based.
-    segment_data : recarray
+    segment_data : recarray or dataframe
         Numpy record array of length equal to nss, with columns for each
         variable entered in items 6a, 6b and 6c (see SFR package input
         instructions). Segment numbers are one-based.
+    channel_geometry_data : dict of dicts containing lists
+        Optional. Outer dictionary keyed by stress period (0-based); inner
+        dictionaries keyed by segment number (1-based), for which 8-point channel
+        cross section geometries are desired. Inner dict values are lists of shape
+        (2,8) - with the first dimension referring to two lists: one of 8 XCPT
+        values, and the other of 8 ZCPT values.
+        Example structure: {kper: {segment: [[xcpt1...xcpt8],[zcpt1...zcpt8]]}}.
+        Note that for these to be applied, the user must also specify an icalc
+        value of 2 for each corresponding segment in segment_data for the
+        relevant stress periods.
     dataset_5 : dict of lists
         Optional; will be built automatically from segment_data unless
         specified. Dict of lists, with key for each stress period. Each list
@@ -217,7 +223,7 @@ class ModflowSfr2(Package):
         filenames=None the package name will be created using the model name
         and package extension and the cbc output and sfr output name will be
         created using the model name and .cbc the .sfr.bin/.sfr.out extensions
-        (for example, modflowtest.cbc, and modflowtest.sfr.bin), if ipakcbc and
+        (for example, modflowtest.cbc, and modflowtest.sfr.bin), if ipakcb and
         istcb2 are numbers greater than zero. If a single string is passed the
         package name will be set to the string and other uzf output files will
         be set to the model name with the appropriate output file extensions.
@@ -340,7 +346,6 @@ class ModflowSfr2(Package):
         filenames=None,
         options=None,
     ):
-
         # set default unit number of one is not specified
         if unit_number is None:
             unit_number = ModflowSfr2._defaultunit()
@@ -348,13 +353,8 @@ class ModflowSfr2(Package):
         # set filenames
         filenames = self._prepare_filenames(filenames, 3)
 
-        # update external file information with cbc output, if necessary
-        if ipakcb is not None:
-            model.add_output_file(
-                ipakcb, fname=filenames[1], package=self._ftype()
-            )
-        else:
-            ipakcb = 0
+        # cbc output file
+        self.set_cbc_output_file(ipakcb, model, filenames[1])
 
         # add sfr flow output file
         if istcb2 is not None:
@@ -421,6 +421,8 @@ class ModflowSfr2(Package):
         )
         if segment_data is not None:
             # segment_data is a zero-d array
+            if isinstance(segment_data, pd.DataFrame):
+                segment_data = segment_data.to_records(index=False)
             if not isinstance(segment_data, dict):
                 if len(segment_data.shape) == 0:
                     segment_data = np.atleast_1d(segment_data)
@@ -439,7 +441,6 @@ class ModflowSfr2(Package):
             dleak  # tolerance level of stream depth used in computing leakage
         )
 
-        self.ipakcb = ipakcb
         # flag; unit number for writing table of SFR output to text file
         self.istcb2 = istcb2
 
@@ -469,6 +470,8 @@ class ModflowSfr2(Package):
         # Dataset 2.
         self.reach_data = self.get_empty_reach_data(np.abs(self._nstrm))
         if reach_data is not None:
+            if isinstance(reach_data, pd.DataFrame):
+                reach_data = reach_data.to_records(index=False)
             for n in reach_data.dtype.names:
                 self.reach_data[n] = reach_data[n]
 
@@ -647,7 +650,6 @@ class ModflowSfr2(Package):
 
     @property
     def df(self):
-        pd = import_optional_dependency("pandas")
         return pd.DataFrame(self.reach_data)
 
     def _make_graph(self):
@@ -787,7 +789,6 @@ class ModflowSfr2(Package):
 
     @classmethod
     def load(cls, f, model, nper=None, gwt=False, nsol=1, ext_unit_dict=None):
-
         if model.verbose:
             print("loading sfr2 package file...")
 
@@ -904,9 +905,7 @@ class ModflowSfr2(Package):
         channel_geometry_data = {}
         channel_flow_data = {}
         dataset_5 = {}
-        aux_variables = (
-            {}
-        )  # not sure where the auxiliary variables are supposed to go
+        aux_variables = {}  # not sure where the auxiliary variables are supposed to go
         for i in range(0, nper):
             # Dataset 5
             dataset_5[i] = _get_dataset(f.readline(), [-1, 0, 0, 0])
@@ -992,7 +991,7 @@ class ModflowSfr2(Package):
             if tabfiles and i == 0:
                 for j in range(numtab):
                     segnum, numval, iunit = map(
-                        int, f.readline().strip().split()
+                        int, f.readline().strip().split()[:3]
                     )
                     tabfiles_dict[segnum] = {"numval": numval, "inuit": iunit}
 
@@ -1167,7 +1166,7 @@ class ModflowSfr2(Package):
                 )
             header += "\n"
 
-            with open(logfile, "w") as log:
+            with open(os.path.join(self.parent.model_ws, logfile), "w") as log:
                 log.write(header)
                 a = np.array(l).transpose()
                 for line in a:
@@ -1368,9 +1367,11 @@ class ModflowSfr2(Package):
         }
         slopes = np.array(
             [
-                (elev[i] - dnelev[i]) / dist[i]
-                if dnelev[i] != -9999
-                else default_slope
+                (
+                    (elev[i] - dnelev[i]) / dist[i]
+                    if dnelev[i] != -9999
+                    else default_slope
+                )
                 for i in rd.reachID
             ]
         )
@@ -1415,7 +1416,6 @@ class ModflowSfr2(Package):
             # for each outseg key, for each upseg, check for more upsegs,
             # append until headwaters has been reached
             for outseg in outsegs:
-
                 up = True
                 upsegslist = upsegs[outseg]
                 while up:
@@ -1436,7 +1436,6 @@ class ModflowSfr2(Package):
         return all_upsegs
 
     def get_variable_by_stress_period(self, varname):
-
         dtype = []
         all_data = np.zeros((self.nss, self.nper), dtype=float)
         for per in range(self.nper):
@@ -1576,8 +1575,6 @@ class ModflowSfr2(Package):
         ax : matplotlib.axes._subplots.AxesSubplot object
         """
         import matplotlib.pyplot as plt
-
-        pd = import_optional_dependency("pandas")
 
         df = self.df
         m = self.parent
@@ -1728,7 +1725,6 @@ class ModflowSfr2(Package):
         return np.array(reach_values)
 
     def _write_1c(self, f_sfr):
-
         # NSTRM NSS NSFRPAR NPARSEG CONST DLEAK ipakcb  ISTCB2
         # [ISFROPT] [NSTRAIL] [ISUZN] [NSFRSETS] [IRTFLG] [NUMTIM] [WEIGHT] [FLWTOL]
         f_sfr.write(
@@ -1767,7 +1763,6 @@ class ModflowSfr2(Package):
         f_sfr.write("\n")
 
     def _write_reach_data(self, f_sfr):
-
         # Write the recarray (data) to the file (or file handle) f
         assert isinstance(
             self.reach_data, np.recarray
@@ -1835,7 +1830,7 @@ class ModflowSfr2(Package):
             fdpth,
             awdth,
             bwdth,
-        ) = [0 if v == self.default_value else v for v in seg_dat]
+        ) = (0 if v == self.default_value else v for v in seg_dat)
 
         f_sfr.write(
             " ".join(fmts[0:4]).format(nseg, icalc, outseg, iupseg) + " "
@@ -1899,9 +1894,9 @@ class ModflowSfr2(Package):
         icalc = self.segment_data[i][j][1]
         seg_dat = np.array(self.segment_data[i])[cols][j]
         fmts = _fmt_string_list(seg_dat)
-        hcond, thickm, elevupdn, width, depth, thts, thti, eps, uhc = [
+        hcond, thickm, elevupdn, width, depth, thts, thti, eps, uhc = (
             0 if v == self.default_value else v for v in seg_dat
-        ]
+        )
 
         if self.isfropt in [0, 4, 5] and icalc <= 0:
             f_sfr.write(
@@ -2012,15 +2007,12 @@ class ModflowSfr2(Package):
         # items 3 and 4 are skipped (parameters not supported)
 
         for i in range(0, self.nper):
-
             # item 5
             itmp = self.dataset_5[i][0]
             f_sfr.write(" ".join(map(str, self.dataset_5[i])) + "\n")
             if itmp > 0:
-
                 # Item 6
                 for j in range(itmp):
-
                     # write datasets 6a, 6b and 6c
                     self._write_segment_data(i, j, f_sfr)
 
@@ -2448,7 +2440,7 @@ class check:
         # simpler check method using paths from routing graph
         circular_segs = [k for k, v in self.sfr.paths.items() if v is None]
         if len(circular_segs) > 0:
-            txt += "{0} instances where an outlet was not found after {1} consecutive segments!\n".format(
+            txt += "{} instances where an outlet was not found after {} consecutive segments!\n".format(
                 len(circular_segs), self.sfr.nss
             )
             if self.level == 1:
@@ -2531,7 +2523,7 @@ class check:
             )
         else:
             txt += (
-                "No DIS package or SpatialReference object; cannot "
+                "No DIS package or modelgrid object; cannot "
                 "check reach proximities."
             )
             self._txt_footer(headertxt, txt, "")
@@ -2583,7 +2575,6 @@ class check:
 
         nodes_with_multiple_conductance = set()
         for node in shared_cells:
-
             # select the collocated reaches for this cell
             conductances = Cond[reach_data["node"] == node].copy()
             conductances.sort()
@@ -2821,7 +2812,6 @@ class check:
             or self.sfr.reachinput
             and self.sfr.isfropt in [1, 2, 3]
         ):  # see SFR input instructions
-
             # compute outreaches if they aren't there already
             if np.diff(self.sfr.reach_data.outreach).max() == 0:
                 self.sfr.set_outreaches()

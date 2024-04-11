@@ -1,5 +1,5 @@
-"""Test copying of flopy objects.
-"""
+"""Test copying of flopy objects."""
+
 import copy
 import inspect
 
@@ -10,7 +10,8 @@ from flopy.datbase import DataInterface, DataType
 from flopy.mbase import ModelInterface
 from flopy.mf6.data.mfdatalist import MFList, MFTransientList
 from flopy.mf6.mfpackage import MFChildPackages, MFPackage
-from flopy.mf6.modflow.mfsimulation import MFSimulation, MFSimulationData
+from flopy.mf6.mfsimbase import MFSimulationData
+from flopy.mf6.modflow.mfsimulation import MFSimulation
 from flopy.modflow import Modflow
 from flopy.utils import TemporalReference
 
@@ -62,10 +63,10 @@ def model_is_copy(m1, m2):
             continue
         elif k not in m2.__dict__:
             return False
-        elif type(v) == bool:
+        elif isinstance(v, bool):
             if not v == v2:
                 return False
-        elif type(v) in [str, int, float, dict, list]:
+        elif isinstance(v, (str, int, float, dict, list)):
             if v != v2:
                 return False
             continue
@@ -116,13 +117,13 @@ def package_is_copy(pk1, pk2):
                 return False
         elif k not in pk2.__dict__:
             return False
-        elif type(v) == bool:
+        elif isinstance(v, bool):
             if not v == v2:
                 return False
-        elif type(v) in [str, int, float, dict]:
+        elif isinstance(v, (str, int, float, dict)):
             if v != v2:
                 return False
-        elif type(v) == list:
+        elif isinstance(v, list):
             for item, item2 in zip(v, v2):
                 if not isinstance(item, MFPackage):
                     if item != item2:
@@ -219,7 +220,7 @@ def list_is_copy(mflist1, mflist2):
 def test_mf2005_copy(example_data_path):
     m = Modflow.load(
         "freyberg.nam",
-        model_ws=str(example_data_path / "freyberg_multilayer_transient"),
+        model_ws=example_data_path / "freyberg_multilayer_transient",
     )
     m_c = copy.copy(m)
     m_dc = copy.deepcopy(m)
@@ -232,7 +233,7 @@ def test_mf6_copy(example_data_path):
     sim = MFSimulation.load(
         "mfsim.nam",
         "mf6",
-        sim_ws=str(example_data_path / "mf6" / "test045_lake2tr"),
+        sim_ws=example_data_path / "mf6" / "test045_lake2tr",
     )
     m = sim.get_model("lakeex2a")
     m_c = copy.copy(m)

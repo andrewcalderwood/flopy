@@ -7,10 +7,11 @@ MODFLOW Guide
 <https://water.usgs.gov/ogw/modflow/MODFLOW-2005-Guide/name_file.html>`_.
 
 """
+
 import os
 from os import PathLike
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import List, Tuple
+from typing import List, Tuple, Union
 
 
 class NamData:
@@ -205,19 +206,29 @@ def parsenamefile(namfilename, packages, verbose=True):
 
 
 def attribs_from_namfile_header(namefile):
-    # check for reference info in the nam file header
+    """Return spatial and temporal reference info from the nam header.
+
+    Parameters
+    ----------
+    namefile : str, PathLike or None
+        Path to NAM file to read.
+
+    Returns
+    -------
+    dict
+    """
     defaults = {
         "xll": None,
         "yll": None,
         "xul": None,
         "yul": None,
         "rotation": 0.0,
-        "proj4_str": None,
+        "crs": None,
     }
     if namefile is None:
         return defaults
     header = []
-    with open(namefile, "r") as f:
+    with open(namefile) as f:
         for line in f:
             if not line.startswith("#"):
                 break
@@ -262,24 +273,38 @@ def attribs_from_namfile_header(namefile):
                 defaults["proj4_str"] = proj4
             except:
                 print(f"   could not parse proj4_str in {namefile}")
+        elif "crs" in item.lower():
+            try:
+                crs = ":".join(item.split(":")[1:]).strip()
+                if crs.lower() == "none":
+                    crs = None
+                defaults["crs"] = crs
+            except:
+                print(f"   could not parse crs in {namefile}")
         elif "start" in item.lower():
             try:
                 start_datetime = item.split(":")[1].strip()
                 defaults["start_datetime"] = start_datetime
             except:
                 print(f"   could not parse start in {namefile}")
+    if "proj4_str" in defaults and defaults["crs"] is None:
+        # handle deprecated keyword, use "crs" instead
+        defaults["crs"] = defaults.pop("proj4_str")
     return defaults
 
 
 def get_entries_from_namefile(
-    path: PathLike, ftype: str = None, unit: int = None, extension: str = None
+    path: Union[str, PathLike],
+    ftype: str = None,
+    unit: int = None,
+    extension: str = None,
 ) -> List[Tuple]:
     """Get entries from an MF6 namefile. Can select using FTYPE, UNIT, or file extension.
     This function only supports MF6 namefiles.
 
     Parameters
     ----------
-    path : str
+    path : str or PathLike
         path to a MODFLOW-based model name file
     ftype : str
         package type
@@ -295,7 +320,7 @@ def get_entries_from_namefile(
         namefile entry that meets a user-specified value.
     """
     entries = []
-    with open(path, "r") as f:
+    with open(path) as f:
         for line in f:
             if line.strip() == "":
                 continue
@@ -357,7 +382,7 @@ def get_input_files(namefile):
     srcdir = os.path.dirname(namefile)
     filelist = []
     fname = os.path.join(srcdir, namefile)
-    with open(fname, "r") as f:
+    with open(fname) as f:
         lines = f.readlines()
 
     for line in lines:
@@ -382,7 +407,6 @@ def get_input_files(namefile):
         try:
             f = open(fname, "r")
             for line in f:
-
                 # Skip invalid lines
                 ll = line.strip().split()
                 if len(ll) < 2:
@@ -454,7 +478,7 @@ def get_mf6_nper(tdisfile):
     nper : int
         number of stress periods in the simulation
     """
-    with open(tdisfile, "r") as f:
+    with open(tdisfile) as f:
         lines = f.readlines()
     line = [line for line in lines if "NPER" in line.upper()][0]
     nper = line.strip().split()[1]
@@ -472,12 +496,11 @@ def get_mf6_mshape(disfile):
     mshape : tuple
         tuple with the shape of the MODFLOW 6 model.
     """
-    with open(disfile, "r") as f:
+    with open(disfile) as f:
         lines = f.readlines()
 
     d = {}
     for line in lines:
-
         # Skip over blank and commented lines
         ll = line.strip().split()
         if len(ll) < 2:
@@ -524,12 +547,10 @@ def get_mf6_files(mfnamefile):
     namefiles = []
 
     with open(mfnamefile) as f:
-
         # Read line and skip comments
         lines = f.readlines()
 
     for line in lines:
-
         # Skip over blank and commented lines
         ll = line.strip().split()
         if len(ll) < 2:
@@ -550,7 +571,7 @@ def get_mf6_files(mfnamefile):
     # Go through name files and get files
     for namefile in namefiles:
         fname = os.path.join(srcdir, namefile)
-        with open(fname, "r") as f:
+        with open(fname) as f:
             lines = f.readlines()
         insideblock = False
 
@@ -614,7 +635,6 @@ def _get_mf6_external_files(srcdir, outplist, files):
         try:
             f = open(fname, "r")
             for line in f:
-
                 # Skip invalid lines
                 ll = line.strip().split()
                 if len(ll) < 2:
@@ -704,12 +724,11 @@ def get_mf6_ftypes(namefile, ftypekeys):
     ftypes : list
         list of FTYPES that match ftypekeys in namefile
     """
-    with open(namefile, "r") as f:
+    with open(namefile) as f:
         lines = f.readlines()
 
     ftypes = []
     for line in lines:
-
         # Skip over blank and commented lines
         ll = line.strip().split()
         if len(ll) < 2:

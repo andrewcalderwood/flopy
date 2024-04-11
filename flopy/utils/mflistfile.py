@@ -10,8 +10,8 @@ import os
 import re
 
 import numpy as np
+import pandas as pd
 
-from ..utils import import_optional_dependency
 from ..utils.flopy_io import get_ts_sp
 from ..utils.utils_def import totim_to_datetime
 
@@ -44,7 +44,6 @@ class ListBudget:
     """
 
     def __init__(self, file_name, budgetkey=None, timeunit="days"):
-
         # Set up file reading
         assert os.path.exists(file_name), f"file_name {file_name} not found"
         self.file_name = file_name
@@ -307,11 +306,10 @@ class ListBudget:
             and not units == "minutes"
             and not units == "hours"
         ):
-            err = (
+            raise AssertionError(
                 '"units" input variable must be "minutes", "hours", '
-                'or "seconds": {0} was specified'.format(units)
+                f'or "seconds": {units} was specified'
             )
-            raise AssertionError(err)
         try:
             seekpoint = self._seek_to_string("Elapsed run time:")
         except:
@@ -495,11 +493,6 @@ class ListBudget:
         >>> incrementaldf, cumulativedf = mf_list.get_dataframes()
 
         """
-
-        pd = import_optional_dependency(
-            "pandas",
-            error_message="ListBudget.get_dataframes() requires pandas.",
-        )
 
         if not self._isvalid:
             return None
@@ -713,7 +706,7 @@ class ListBudget:
         for entry in self.entries:
             incdict[entry] = []
             cumdict[entry] = []
-            null_entries[entry] = np.NaN
+            null_entries[entry] = np.nan
         self.null_entries = [null_entries, null_entries]
         return incdict, cumdict
 
@@ -794,7 +787,6 @@ class ListBudget:
         cumdict = {}
         entrydict = {}
         while True:
-
             if line == "":
                 print(
                     "end of file found while seeking budget "
@@ -854,7 +846,6 @@ class ListBudget:
         return incdict, cumdict
 
     def _parse_budget_line(self, line):
-
         # get the budget item name
         entry = line.strip().split("=")[0].strip()
 
@@ -872,12 +863,12 @@ class ListBudget:
             cumu = float(cu_str)
         except:
             if "NAN" in cu_str.strip().upper():
-                cumu = np.NaN
+                cumu = np.nan
         try:
             flux = float(fx_str)
         except:
             if "NAN" in fx_str.strip().upper():
-                flux = np.NaN
+                flux = np.nan
         return entry, flux, cumu
 
     def _get_totim(self, ts, sp, seekpoint):
@@ -892,7 +883,7 @@ class ListBudget:
                     "end of file found while seeking budget "
                     "information for ts,sp: {} {}".format(ts, sp)
                 )
-                return np.NaN, np.NaN, np.NaN
+                return np.nan, np.nan, np.nan
             elif (
                 ihead == 2
                 and "SECONDS     MINUTES      HOURS       DAYS        YEARS"
@@ -911,22 +902,22 @@ class ListBudget:
             line = self.f.readline()
             if translen is None:
                 print("error parsing translen for ts,sp", ts, sp)
-                return np.NaN, np.NaN, np.NaN
+                return np.nan, np.nan, np.nan
 
         tslen = self._parse_time_line(line)
         if tslen is None:
             print("error parsing tslen for ts,sp", ts, sp)
-            return np.NaN, np.NaN, np.NaN
+            return np.nan, np.nan, np.nan
 
         sptim = self._parse_time_line(self.f.readline())
         if sptim is None:
             print("error parsing sptim for ts,sp", ts, sp)
-            return np.NaN, np.NaN, np.NaN
+            return np.nan, np.nan, np.nan
 
         totim = self._parse_time_line(self.f.readline())
         if totim is None:
             print("error parsing totim for ts,sp", ts, sp)
-            return np.NaN, np.NaN, np.NaN
+            return np.nan, np.nan, np.nan
         return tslen, sptim, totim
 
     def _parse_time_line(self, line):

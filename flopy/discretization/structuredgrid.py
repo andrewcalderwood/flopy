@@ -1,6 +1,6 @@
 import copy
-import inspect
 import os.path
+from typing import Union
 
 import numpy as np
 
@@ -84,10 +84,44 @@ class StructuredGrid(Grid):
 
     Parameters
     ----------
-    delc
-        delc array
-    delr
-        delr array
+    delr : float or ndarray
+        column spacing along a row.
+    delc : float or ndarray
+        row spacing along a column.
+    top : float or ndarray
+        top elevations of cells in topmost layer
+    botm : float or ndarray
+        bottom elevations of all cells
+    idomain : int or ndarray
+        ibound/idomain value for each cell
+    lenuni : int or ndarray
+        model length units
+    crs : pyproj.CRS, int, str, optional if `prjfile` is specified
+        Coordinate reference system (CRS) for the model grid
+        (must be projected; geographic CRS are not supported).
+        The value can be anything accepted by
+        :meth:`pyproj.CRS.from_user_input() <pyproj.crs.CRS.from_user_input>`,
+        such as an authority string (eg "EPSG:26916") or a WKT string.
+    prjfile : str or pathlike, optional if `crs` is specified
+        ESRI-style projection file with well-known text defining the CRS
+        for the model grid (must be projected; geographic CRS are not supported).
+    xoff : float
+        x coordinate of the origin point (lower left corner of model grid)
+        in the spatial reference coordinate system
+    yoff : float
+        y coordinate of the origin point (lower left corner of model grid)
+        in the spatial reference coordinate system
+    angrot : float
+        rotation angle of model grid, as it is rotated around the origin point
+    **kwargs : dict, optional
+        Support deprecated keyword options.
+
+        .. deprecated:: 3.5
+           The following keyword options will be removed for FloPy 3.6:
+
+             - ``prj`` (str or pathlike): use ``prjfile`` instead.
+             - ``epsg`` (int): use ``crs`` instead.
+             - ``proj4`` (str): use ``crs`` instead.
 
     Properties
     ----------
@@ -119,9 +153,8 @@ class StructuredGrid(Grid):
         botm=None,
         idomain=None,
         lenuni=None,
-        epsg=None,
-        proj4=None,
-        prj=None,
+        crs=None,
+        prjfile=None,
         xoff=0.0,
         yoff=0.0,
         angrot=0.0,
@@ -129,19 +162,20 @@ class StructuredGrid(Grid):
         nrow=None,
         ncol=None,
         laycbd=None,
+        **kwargs,
     ):
         super().__init__(
             "structured",
-            top,
-            botm,
-            idomain,
-            lenuni,
-            epsg,
-            proj4,
-            prj,
-            xoff,
-            yoff,
-            angrot,
+            top=top,
+            botm=botm,
+            idomain=idomain,
+            lenuni=lenuni,
+            crs=crs,
+            prjfile=prjfile,
+            xoff=xoff,
+            yoff=yoff,
+            angrot=angrot,
+            **kwargs,
         )
         if delc is not None:
             self.__nrow = len(delc)
@@ -740,6 +774,47 @@ class StructuredGrid(Grid):
 
         return self._polygons
 
+    @property
+    def geo_dataframe(self):
+        """
+        Returns a geopandas GeoDataFrame of the model grid
+
+        Returns
+        -------
+            GeoDataFrame
+        """
+        polys = [[list(zip(*i))] for i in zip(*self.cross_section_vertices)]
+        gdf = super().geo_dataframe(polys)
+        return gdf
+
+    def convert_grid(self, factor):
+        """
+        Method to scale the model grid based on user supplied scale factors
+
+        Parameters
+        ----------
+        factor
+
+        Returns
+        -------
+            Grid object
+        """
+        if super().is_complete:
+            return StructuredGrid(
+                delc=self.delc * factor,
+                delr=self.delr * factor,
+                top=self.top * factor,
+                botm=self.botm * factor,
+                idomain=self.idomain,
+                xoff=self.xoffset * factor,
+                yoff=self.yoffset * factor,
+                angrot=self.angrot,
+            )
+        else:
+            raise AssertionError(
+                "Grid is not complete and cannot be converted"
+            )
+
     ###############
     ### Methods ###
     ###############
@@ -761,39 +836,53 @@ class StructuredGrid(Grid):
                 row number
             j : int
                 column number
-            as_node : bool
+            as_nodes : bool
                 flag to return neighbors as node numbers
+            method : str
+                "rook" for shared edge neighbors (default) "queen" for shared
+                vertex neighbors (for flow accumulation calculations)
+            reset : bool
+                flag to re-calculate neighbors, default is False
 
         Returns
         -------
             list of neighboring cells
         """
         nn = None
+        as_nodes = kwargs.pop("as_nodes", False)
+
         if kwargs:
             if "node" in kwargs:
                 nn = kwargs.pop("node")
+                as_nodes = True
             else:
                 k = kwargs.pop("k", 0)
-                i = kwargs.pop("i")
-                j = kwargs.pop("j")
+                i = kwargs.pop("i", None)
+                j = kwargs.pop("j", None)
+                if i is None or j is None:
+                    pass
+                else:
+                    nn = self.get_node([(k, i, j)])[0]
 
         if len(args) > 0:
             if len(args) == 1:
                 nn = args[0]
+                as_nodes = True
             elif len(args) == 2:
                 k = 0
                 i, j = args[0:2]
             else:
                 k, i, j = args[0:3]
 
-        if nn is None:
-            nn = self.get_node([(k, i, j)])[0]
+            if nn is None:
+                nn = self.get_node([(k, i, j)])[0]
+        else:
+            as_nodes = True
 
-        as_nodes = kwargs.pop("as_nodes", False)
-
-        neighbors = super().neighbors(nn)
+        neighbors = super().neighbors(nn, **kwargs)
         if not as_nodes:
             neighbors = self.get_lrc(neighbors)
+
         return neighbors
 
     def intersect(self, x, y, z=None, local=False, forgive=False):
@@ -826,11 +915,6 @@ class StructuredGrid(Grid):
             The column number
 
         """
-        if isinstance(z, bool):
-            # trigger interface change warning
-            frame_info = inspect.getframeinfo(inspect.currentframe())
-            self._warn_intersect(frame_info.filename, frame_info.lineno)
-
         # transform x and y to local coordinates
         x, y = super().intersect(x, y, local, forgive)
 
@@ -907,30 +991,53 @@ class StructuredGrid(Grid):
 
     def get_cell_vertices(self, *args, **kwargs):
         """
-        Method to get a set of cell vertices for a single cell
-            used in the Shapefile export utilities and plotting code
-        :param node: (int) node number
-        :param i: (int) cell row number
-        :param j: (int) cell column number
+        Get a set of cell vertices for a single cell.
+
+        Parameters
+        ----------
+        node : int, optional
+            Node index, mutually exclusive with i and j
+        i, j : int, optional
+            Row and column index, mutually exclusive with node
+
         Returns
-        ------- list of x,y cell vertices
+        -------
+        list
+            list of tuples with x,y coordinates to cell vertices
+
+        Examples
+        --------
+        >>> import flopy
+        >>> import numpy as np
+        >>> delr, delc = np.array([10.0] * 3), np.array([10.0] * 4)
+        >>> sg = flopy.discretization.StructuredGrid(delr=delr, delc=delc)
+        >>> sg.get_cell_vertices(node=0)
+        [(0.0, 40.0), (10.0, 40.0), (10.0, 30.0), (0.0, 30.0)]
+        >>> sg.get_cell_vertices(3, 0)
+        [(0.0, 10.0), (10.0, 10.0), (10.0, 0.0), (0.0, 0.0)]
         """
-        nn = None
         if kwargs:
-            if "node" in kwargs:
-                nn = kwargs.pop("node")
-            else:
+            if args:
+                raise TypeError(
+                    "mixed positional and keyword arguments not supported"
+                )
+            elif "node" in kwargs:
+                _, i, j = self.get_lrc(kwargs.pop("node"))[0]
+            elif "i" in kwargs and "j" in kwargs:
                 i = kwargs.pop("i")
                 j = kwargs.pop("j")
+            if kwargs:
+                unused = ", ".join(kwargs.keys())
+                raise TypeError(f"unused keyword arguments: {unused}")
+        elif len(args) == 0:
+            raise TypeError("expected one or more arguments")
 
-        if len(args) > 0:
-            if len(args) == 1:
-                nn = args[0]
-            else:
-                i, j = args[0:2]
-
-        if nn is not None:
-            k, i, j = self.get_lrc(nn)[0]
+        if len(args) == 1:
+            _, i, j = self.get_lrc(args[0])[0]
+        elif len(args) == 2:
+            i, j = args
+        elif len(args) > 2:
+            raise TypeError("too many arguments")
 
         self._copy_cache = False
         cell_verts = [
@@ -1594,7 +1701,7 @@ class StructuredGrid(Grid):
                 plotarray = plotarray.reshape(self.shape)
                 plotarray = plotarray[layer, :, :]
         else:
-            raise Exception("Array to plot must be of dimension 1, 2, or 3")
+            raise ValueError("Array to plot must be of dimension 1, 2, or 3")
         msg = f"{plotarray.shape} /= {required_shape}"
         assert plotarray.shape == required_shape, msg
         return plotarray
@@ -1707,13 +1814,13 @@ class StructuredGrid(Grid):
         )
 
     @classmethod
-    def from_gridspec(cls, file_path, lenuni=0):
+    def from_gridspec(cls, file_path: Union[str, os.PathLike], lenuni=0):
         """
         Instantiate a StructuredGrid from grid specification file.
 
         Parameters
         ----------
-        file_path: Path-like
+        file_path: str or PathLike
             Path to the grid specification file
         lenuni: int
             Length unit code
@@ -1723,7 +1830,7 @@ class StructuredGrid(Grid):
             A StructuredGrid
         """
 
-        with open(file_path, "r") as f:
+        with open(file_path) as f:
             raw = f.readline().strip().split()
             nrow = int(raw[0])
             ncol = int(raw[1])

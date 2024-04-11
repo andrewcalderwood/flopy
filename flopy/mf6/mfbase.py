@@ -1,4 +1,5 @@
-""" Base classes for Modflow 6 """
+"""Base classes for Modflow 6"""
+
 import copy
 import inspect
 import os
@@ -7,7 +8,10 @@ import traceback
 import warnings
 from collections.abc import Iterable
 from enum import Enum
+from pathlib import Path
 from shutil import copyfile
+from typing import Union
+from warnings import warn
 
 
 # internal handled exceptions
@@ -189,7 +193,7 @@ class MFFileMgmt:
     Parameters
     ----------
 
-    path : str
+    path : str or PathLike
         Path on disk to the simulation
 
     Attributes
@@ -200,7 +204,7 @@ class MFFileMgmt:
 
     """
 
-    def __init__(self, path, mfsim=None):
+    def __init__(self, path: Union[str, os.PathLike], mfsim=None):
         self.simulation = mfsim
         self._sim_path = ""
         self.set_sim_path(path, True)
@@ -271,26 +275,30 @@ class MFFileMgmt:
         current_abs_path = self.resolve_path("", model_name, False)
         return os.path.relpath(old_abs_path, current_abs_path)
 
-    def strip_model_relative_path(self, model_name, path):
+    def strip_model_relative_path(self, model_name, path) -> str:
         """Strip out the model relative path part of `path`.  For internal
         FloPy use, not intended for end user."""
-        new_path = path
-        if model_name in self.model_relative_path:
-            model_rel_path = self.model_relative_path[model_name]
-            if (
-                model_rel_path is not None
-                and len(model_rel_path) > 0
-                and model_rel_path != "."
-            ):
-                model_rel_path_lst = model_rel_path.split(os.path.sep)
-                path_lst = path.split(os.path.sep)
-                new_path = ""
-                for i, mrp in enumerate(model_rel_path_lst):
-                    if i >= len(path_lst) or mrp != path_lst[i]:
-                        new_path = os.path.join(new_path, path_lst[i])
-                for rp in path_lst[len(model_rel_path_lst) :]:
-                    new_path = os.path.join(new_path, rp)
-        return new_path
+        if model_name not in self.model_relative_path:
+            return path
+
+        model_rel_path = Path(self.model_relative_path[model_name])
+        if (
+            model_rel_path is None
+            or model_rel_path.is_absolute()
+            or not any(str(model_rel_path))
+            or str(model_rel_path) == os.curdir
+        ):
+            return path
+
+        try:
+            ret_path = Path(path).relative_to(model_rel_path)
+        except ValueError:
+            warnings.warn(
+                f"Could not strip model relative path from {path}: {traceback.format_exc()}"
+            )
+            ret_path = Path(path)
+
+        return str(ret_path.as_posix())
 
     @staticmethod
     def unique_file_name(file_name, lookup):
@@ -308,29 +316,6 @@ class MFFileMgmt:
             return f"{file}_{num}{ext}"
         else:
             return f"{file}_{num}"
-
-    @staticmethod
-    def string_to_file_path(fp_string):
-        """Interpret string as a file path.  For internal FloPy use, not
-        intended for end user."""
-        file_delimiters = ["/", "\\"]
-        new_string = fp_string
-        for delimiter in file_delimiters:
-            arr_string = new_string.split(delimiter)
-            if len(arr_string) > 1:
-                if os.path.isabs(fp_string):
-                    if not arr_string[0] and not arr_string[1]:
-                        new_string = f"{delimiter}{delimiter}"
-                    else:
-                        new_string = (
-                            f"{arr_string[0]}{delimiter}{arr_string[1]}"
-                        )
-                else:
-                    new_string = os.path.join(arr_string[0], arr_string[1])
-                if len(arr_string) > 2:
-                    for path_piece in arr_string[2:]:
-                        new_string = os.path.join(new_string, path_piece)
-        return new_string
 
     def set_last_accessed_path(self):
         """Set the last accessed simulation path to the current simulation
@@ -390,23 +375,23 @@ class MFFileMgmt:
             new_file_path = MFFilePath(file_path, model_name)
             self.existing_file_dict[file_path] = new_file_path
 
-    def set_sim_path(self, path, internal_use=False):
+    def set_sim_path(self, path: Union[str, os.PathLike], internal_use=False):
         """
         Set the file path to the simulation files.  Internal use only,
         call MFSimulation's set_sim_path method instead.
 
         Parameters
         ----------
-        path : str
-            Full path or relative path from working directory to
-            simulation folder
+        path : str or PathLike
+            Path to simulation folder
 
         Returns
         -------
+        None
 
         Examples
         --------
-        self.simulation_data.mfdata.set_sim_path('sim_folder')
+        self.simulation_data.mfdata.set_sim_path('path/to/workspace')
         """
         if not internal_use:
             print(
@@ -416,14 +401,8 @@ class MFFileMgmt:
             if self.simulation is not None:
                 self.simulation.set_sim_path(path)
                 return
-        # recalculate paths for everything
-        # resolve path type
-        path = self.string_to_file_path(path)
-        if os.path.isabs(path):
-            self._sim_path = path
-        else:
-            # assume path is relative to working directory
-            self._sim_path = os.path.join(os.getcwd(), path)
+        # expand tildes and ensure _sim_path is absolute
+        self._sim_path = Path(path).expanduser().absolute()
 
     def resolve_path(
         self, path, model_name, last_loaded_path=False, move_abs_paths=False
@@ -431,9 +410,9 @@ class MFFileMgmt:
         """Resolve a simulation or model path.  For internal FloPy use, not
         intended for end user."""
         if isinstance(path, MFFilePath):
-            file_path = path.file_path
+            file_path = str(path.file_path)
         else:
-            file_path = path
+            file_path = str(path)
 
         # remove quote characters from file path
         file_path = file_path.replace("'", "")
@@ -529,7 +508,7 @@ class PackageContainer:
         package_abbr = f"{model_type}{package_type}"
         factory = PackageContainer.packages_by_abbr.get(package_abbr)
         if factory is None:
-            package_utl_abbr = "utl{}".format(package_type)
+            package_utl_abbr = f"utl{package_type}"
             factory = PackageContainer.packages_by_abbr.get(package_utl_abbr)
         return factory
 
@@ -645,7 +624,7 @@ class PackageContainer:
             )
             main_dict[new_key] = main_dict.pop(key)
 
-    def get_package(self, name=None):
+    def get_package(self, name=None, type_only=False, name_only=False):
         """
         Finds a package by package name, package key, package type, or partial
         package name. returns either a single package, a list of packages,
@@ -654,7 +633,11 @@ class PackageContainer:
         Parameters
         ----------
         name : str
-            Name of the package, 'RIV', 'LPF', etc.
+            Name or type of the package, 'my-riv-1, 'RIV', 'LPF', etc.
+        type_only : bool
+            Search for package by type only
+        name_only : bool
+            Search for package by name only
 
         Returns
         -------
@@ -665,11 +648,11 @@ class PackageContainer:
             return self._packagelist[:]
 
         # search for full package name
-        if name.lower() in self.package_name_dict:
+        if name.lower() in self.package_name_dict and not type_only:
             return self.package_name_dict[name.lower()]
 
         # search for package type
-        if name.lower() in self.package_type_dict:
+        if name.lower() in self.package_type_dict and not name_only:
             if len(self.package_type_dict[name.lower()]) == 0:
                 return None
             elif len(self.package_type_dict[name.lower()]) == 1:
@@ -678,18 +661,19 @@ class PackageContainer:
                 return self.package_type_dict[name.lower()]
 
         # search for file name
-        if name.lower() in self.package_filename_dict:
+        if name.lower() in self.package_filename_dict and not type_only:
             return self.package_filename_dict[name.lower()]
 
         # search for partial and case-insensitive package name
-        for pp in self._packagelist:
-            if pp.package_name is not None:
-                # get first package of the type requested
-                package_name = pp.package_name.lower()
-                if len(package_name) > len(name):
-                    package_name = package_name[0 : len(name)]
-                if package_name.lower() == name.lower():
-                    return pp
+        if not type_only:
+            for pp in self._packagelist:
+                if pp.package_name is not None:
+                    # get first package of the type requested
+                    package_name = pp.package_name.lower()
+                    if len(package_name) > len(name):
+                        package_name = package_name[0 : len(name)]
+                    if package_name.lower() == name.lower():
+                        return pp
 
         return None
 

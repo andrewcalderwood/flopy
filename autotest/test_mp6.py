@@ -1,15 +1,16 @@
 import os
 import shutil
+from pprint import pformat
+from types import SimpleNamespace
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
-from autotest.conftest import get_example_data_path
-from autotest.test_mp6_cases import Mp6Cases1, Mp6Cases2
 from modflow_devtools.markers import requires_exe, requires_pkg
-from pytest_cases import parametrize_with_cases
+from numpy.lib.recfunctions import repack_fields
 
 import flopy
+from autotest.conftest import get_example_data_path
 from flopy.discretization import StructuredGrid
 from flopy.export.shapefile_utils import shp2recarray
 from flopy.modflow import Modflow, ModflowMnw2
@@ -18,7 +19,6 @@ from flopy.modpath.mp6sim import Modpath6Sim, StartingLocationsFile
 from flopy.plot import PlotMapView
 from flopy.utils import EndpointFile, PathlineFile, TimeseriesFile
 from flopy.utils.flopy_io import loadtxt
-from flopy.utils.recarray_utils import ra_slice
 
 pytestmark = pytest.mark.mf6
 
@@ -32,27 +32,26 @@ def copy_modpath_files(source, model_ws, baseName):
     files = [
         file
         for file in os.listdir(source)
-        if file.startswith(baseName)
-        and os.path.isfile(os.path.join(source, file))
+        if file.startswith(baseName) and os.path.isfile(source / file)
     ]
     for file in files:
-        src = str(get_example_data_path() / "mp6" / file)
-        dst = os.path.join(model_ws, file)
+        src = get_example_data_path() / "mp6" / file
+        dst = model_ws / file
         print(f"copying {src} -> {dst}")
         shutil.copy(src, dst)
 
 
 def test_mpsim(function_tmpdir, mp6_test_path):
-    copy_modpath_files(str(mp6_test_path), str(function_tmpdir), "EXAMPLE.")
+    copy_modpath_files(mp6_test_path, function_tmpdir, "EXAMPLE.")
 
-    m = Modflow.load("EXAMPLE.nam", model_ws=str(function_tmpdir))
+    m = Modflow.load("EXAMPLE.nam", model_ws=function_tmpdir)
     m.get_package_list()
 
     mp = Modpath6(
         modelname="ex6",
         exe_name="mp6",
         modflowmodel=m,
-        model_ws=str(function_tmpdir),
+        model_ws=function_tmpdir,
         dis_file=f"{m.name}.dis",
         head_file=f"{m.name}.hed",
         budget_file=f"{m.name}.bud",
@@ -111,29 +110,33 @@ def test_mpsim(function_tmpdir, mp6_test_path):
     )
     mp.write_input()
 
-    sim = Modpath6Sim(model=mp)
-    # starting locations file
-    stl = StartingLocationsFile(model=mp)
-    stldata = StartingLocationsFile.get_empty_starting_locations_data(npt=2)
-    stldata["label"] = ["p1", "p2"]
-    stldata[1]["i0"] = 5
-    stldata[1]["j0"] = 6
-    stldata[1]["xloc0"] = 0.1
-    stldata[1]["yloc0"] = 0.2
-    stl.data = stldata
-    mp.write_input()
-    stllines = open(os.path.join(str(function_tmpdir), "ex6.loc")).readlines()
-    assert stllines[3].strip() == "group1"
-    assert int(stllines[4].strip()) == 2
-    assert stllines[6].strip().split()[-1] == "p2"
+    # test StartingLocationsFile._write_wo_pandas
+    for use_pandas in [True, False]:
+        sim = Modpath6Sim(model=mp)
+        # starting locations file
+        stl = StartingLocationsFile(model=mp, use_pandas=use_pandas)
+        stldata = StartingLocationsFile.get_empty_starting_locations_data(
+            npt=2
+        )
+        stldata["label"] = ["p1", "p2"]
+        stldata[1]["i0"] = 5
+        stldata[1]["j0"] = 6
+        stldata[1]["xloc0"] = 0.1
+        stldata[1]["yloc0"] = 0.2
+        stl.data = stldata
+        mp.write_input()
+        stllines = open(function_tmpdir / "ex6.loc").readlines()
+        assert stllines[3].strip() == "group1"
+        assert int(stllines[4].strip()) == 2
+        assert stllines[6].strip().split()[-1] == "p2"
 
 
-@requires_pkg("pandas", "shapefile")
+@requires_pkg("shapefile", "shapely")
 def test_get_destination_data(function_tmpdir, mp6_test_path):
-    copy_modpath_files(str(mp6_test_path), str(function_tmpdir), "EXAMPLE.")
-    copy_modpath_files(str(mp6_test_path), str(function_tmpdir), "EXAMPLE-3.")
+    copy_modpath_files(mp6_test_path, function_tmpdir, "EXAMPLE.")
+    copy_modpath_files(mp6_test_path, function_tmpdir, "EXAMPLE-3.")
 
-    m = Modflow.load("EXAMPLE.nam", model_ws=str(function_tmpdir))
+    m = Modflow.load("EXAMPLE.nam", model_ws=function_tmpdir)
 
     mg1 = m.modelgrid
     mg1.set_coord_info(
@@ -150,10 +153,10 @@ def test_get_destination_data(function_tmpdir, mp6_test_path):
     )
 
     # test deprecation
-    m.dis.export(str(function_tmpdir / "dis.shp"))
+    m.dis.export(function_tmpdir / "dis.shp")
 
-    pthld = PathlineFile(str(function_tmpdir / "EXAMPLE-3.pathline"))
-    epd = EndpointFile(str(function_tmpdir / "EXAMPLE-3.endpoint"))
+    pthld = PathlineFile(function_tmpdir / "EXAMPLE-3.pathline")
+    epd = EndpointFile(function_tmpdir / "EXAMPLE-3.endpoint")
 
     well_epd = epd.get_destination_endpoint_data(dest_cells=[(4, 12, 12)])
     well_pthld = pthld.get_destination_pathline_data(
@@ -167,7 +170,7 @@ def test_get_destination_data(function_tmpdir, mp6_test_path):
 
     # check that all starting locations are included in the pathline data
     # (pathline data slice not just endpoints)
-    starting_locs = ra_slice(well_epd, ["k0", "i0", "j0"])
+    starting_locs = repack_fields(well_epd[["k0", "i0", "j0"]])
     pathline_locs = np.array(
         np.array(well_pthld)[["k", "i", "j"]].tolist(),
         dtype=starting_locs.dtype,
@@ -178,12 +181,12 @@ def test_get_destination_data(function_tmpdir, mp6_test_path):
     epd.write_shapefile(
         well_epd,
         direction="starting",
-        shpname=str(function_tmpdir / "starting_locs.shp"),
+        shpname=function_tmpdir / "starting_locs.shp",
         mg=m.modelgrid,
     )
 
     # test writing shapefile of pathlines
-    fpth = str(function_tmpdir / "pathlines_1per.shp")
+    fpth = function_tmpdir / "pathlines_1per.shp"
     pthld.write_shapefile(
         well_pthld,
         one_per_particle=True,
@@ -191,7 +194,7 @@ def test_get_destination_data(function_tmpdir, mp6_test_path):
         mg=m.modelgrid,
         shpname=fpth,
     )
-    fpth = str(function_tmpdir / "pathlines_1per_end.shp")
+    fpth = function_tmpdir / "pathlines_1per_end.shp"
     pthld.write_shapefile(
         well_pthld,
         one_per_particle=True,
@@ -200,7 +203,7 @@ def test_get_destination_data(function_tmpdir, mp6_test_path):
         shpname=fpth,
     )
     # test writing shapefile of pathlines
-    fpth = str(function_tmpdir / "pathlines_1per2.shp")
+    fpth = function_tmpdir / "pathlines_1per2.shp"
     pthld.write_shapefile(
         well_pthld,
         one_per_particle=True,
@@ -209,7 +212,7 @@ def test_get_destination_data(function_tmpdir, mp6_test_path):
         shpname=fpth,
     )
     # test writing shapefile of pathlines
-    fpth = str(function_tmpdir / "pathlines_1per2_ll.shp")
+    fpth = function_tmpdir / "pathlines_1per2_ll.shp"
     pthld.write_shapefile(
         well_pthld,
         one_per_particle=True,
@@ -217,13 +220,13 @@ def test_get_destination_data(function_tmpdir, mp6_test_path):
         mg=mg,
         shpname=fpth,
     )
-    fpth = str(function_tmpdir / "pathlines.shp")
+    fpth = function_tmpdir / "pathlines.shp"
     pthld.write_shapefile(
         well_pthld, one_per_particle=False, mg=m.modelgrid, shpname=fpth
     )
 
     # test that endpoints were rotated and written correctly
-    ra = shp2recarray(str(function_tmpdir / "starting_locs.shp"))
+    ra = shp2recarray(function_tmpdir / "starting_locs.shp")
     p3 = ra.geometry[ra.particleid == 4][0]
     xorig, yorig = m.modelgrid.get_coords(well_epd.x0[0], well_epd.y0[0])
     assert p3.x - xorig + p3.y - yorig < 1e-4
@@ -233,16 +236,16 @@ def test_get_destination_data(function_tmpdir, mp6_test_path):
     )  # this also checks for 1-based
 
     # test that particle attribute information is consistent with pathline file
-    ra = shp2recarray(str(function_tmpdir / "pathlines.shp"))
+    ra = shp2recarray(function_tmpdir / "pathlines.shp")
     inds = (ra.particleid == 8) & (ra.i == 12) & (ra.j == 12)
     assert ra.time[inds][0] - 20181.7 < 0.1
     assert ra.xloc[inds][0] - 0.933 < 0.01
 
     # test that k, i, j are correct for single geometry pathlines, forwards
     # and backwards
-    ra = shp2recarray(str(function_tmpdir / "pathlines_1per.shp"))
+    ra = shp2recarray(function_tmpdir / "pathlines_1per.shp")
     assert ra.i[0] == 4, ra.j[0] == 5
-    ra = shp2recarray(str(function_tmpdir / "pathlines_1per_end.shp"))
+    ra = shp2recarray(function_tmpdir / "pathlines_1per_end.shp")
     assert ra.i[0] == 13, ra.j[0] == 13
 
     # test use of arbitrary spatial reference and offset
@@ -250,10 +253,9 @@ def test_get_destination_data(function_tmpdir, mp6_test_path):
         xoff=mg.xoffset,
         yoff=mg.yoffset,
         angrot=mg.angrot,
-        epsg=mg.epsg,
-        proj4=mg.proj4,
+        crs=mg.epsg,
     )
-    ra = shp2recarray(str(function_tmpdir / "pathlines_1per2.shp"))
+    ra = shp2recarray(function_tmpdir / "pathlines_1per2.shp")
     p3_2 = ra.geometry[ra.particleid == 4][0]
     test1 = mg1.xcellcenters[3, 4]
     test2 = mg1.ycellcenters[3, 4]
@@ -268,7 +270,7 @@ def test_get_destination_data(function_tmpdir, mp6_test_path):
     )
 
     # arbitrary spatial reference with ll specified instead of ul
-    ra = shp2recarray(str(function_tmpdir / "pathlines_1per2_ll.shp"))
+    ra = shp2recarray(function_tmpdir / "pathlines_1per2_ll.shp")
     p3_2 = ra.geometry[ra.particleid == 4][0]
     mg.set_coord_info(xoff=mg.xoffset, yoff=mg.yoffset, angrot=30.0)
     assert (
@@ -284,29 +286,27 @@ def test_get_destination_data(function_tmpdir, mp6_test_path):
     xul = 3628793
     yul = 21940389
 
-    m = Modflow.load("EXAMPLE.nam", model_ws=str(function_tmpdir))
+    m = Modflow.load("EXAMPLE.nam", model_ws=function_tmpdir)
 
     mg4 = m.modelgrid
     mg4.set_coord_info(
         xoff=mg4._xul_to_xll(xul, 0.0),
         yoff=mg4._yul_to_yll(yul, 0.0),
         angrot=0.0,
-        epsg=mg4.epsg,
-        proj4=mg4.proj4,
+        crs=mg4.epsg,
     )
 
-    fpth = str(function_tmpdir / "dis2.shp")
+    fpth = function_tmpdir / "dis2.shp"
     m.dis.export(fpth)
-    pthobj = PathlineFile(str(function_tmpdir / "EXAMPLE-3.pathline"))
-    fpth = str(function_tmpdir / "pathlines_1per3.shp")
+    pthobj = PathlineFile(function_tmpdir / "EXAMPLE-3.pathline")
+    fpth = function_tmpdir / "pathlines_1per3.shp"
     pthobj.write_shapefile(shpname=fpth, direction="ending", mg=mg4)
 
 
-@requires_pkg("pandas")
 def test_loadtxt(function_tmpdir, mp6_test_path):
-    copy_modpath_files(str(mp6_test_path), str(function_tmpdir), "EXAMPLE-3.")
+    copy_modpath_files(mp6_test_path, function_tmpdir, "EXAMPLE-3.")
 
-    pthfile = str(function_tmpdir / "EXAMPLE-3.pathline")
+    pthfile = function_tmpdir / "EXAMPLE-3.pathline"
     pthld = PathlineFile(pthfile)
     ra = loadtxt(pthfile, delimiter=" ", skiprows=3, dtype=pthld.dtype)
     ra2 = loadtxt(
@@ -319,21 +319,20 @@ def test_loadtxt(function_tmpdir, mp6_test_path):
 
 
 @requires_exe("mf2005")
-@requires_pkg("pandas")
 def test_modpath(function_tmpdir, example_data_path):
     pth = example_data_path / "freyberg"
     mfnam = "freyberg.nam"
 
     m = Modflow.load(
         mfnam,
-        model_ws=str(pth),
+        model_ws=pth,
         verbose=True,
         exe_name="mf2005",
         check=False,
     )
     assert m.load_fail is False
 
-    m.change_model_ws(str(function_tmpdir))
+    m.change_model_ws(function_tmpdir)
     m.write_input()
 
     success, buff = m.run_model(silent=False)
@@ -345,7 +344,7 @@ def test_modpath(function_tmpdir, example_data_path):
         mpnam,
         exe_name="mp6",
         modflowmodel=m,
-        model_ws=str(function_tmpdir),
+        model_ws=function_tmpdir,
     )
     mpbas = Modpath6Bas(
         mp,
@@ -373,7 +372,7 @@ def test_modpath(function_tmpdir, example_data_path):
         mpnam,
         exe_name="mp6",
         modflowmodel=m,
-        model_ws=str(function_tmpdir),
+        model_ws=function_tmpdir,
     )
     mpbas = Modpath6Bas(
         mpp,
@@ -398,8 +397,8 @@ def test_modpath(function_tmpdir, example_data_path):
 
     # load modpath output files
     if success:
-        endfile = os.path.join(str(function_tmpdir), mp.sim.endpoint_file)
-        pthfile = os.path.join(str(function_tmpdir), mpp.sim.pathline_file)
+        endfile = function_tmpdir / mp.sim.endpoint_file
+        pthfile = function_tmpdir / mpp.sim.pathline_file
 
         # load the endpoint data
         try:
@@ -423,14 +422,14 @@ def test_modpath(function_tmpdir, example_data_path):
         mfnam = "freyberg.nam"
         m = Modflow.load(
             mfnam,
-            model_ws=str(function_tmpdir),
+            model_ws=function_tmpdir,
             verbose=True,
             forgive=False,
             exe_name="mf2005",
         )
 
         # load modpath output files
-        pthfile = os.path.join(str(function_tmpdir), "freybergmpp.mppth")
+        pthfile = function_tmpdir / "freybergmpp.mppth"
 
         # load the pathline data
         pthobj = PathlineFile(pthfile)
@@ -448,7 +447,7 @@ def test_modpath(function_tmpdir, example_data_path):
         # plot the grid and ibound array
         mm.plot_grid()
         mm.plot_ibound()
-        fpth = os.path.join(str(function_tmpdir), "pathline.png")
+        fpth = function_tmpdir / "pathline.png"
         plt.savefig(fpth)
         plt.close()
 
@@ -459,7 +458,7 @@ def test_modpath(function_tmpdir, example_data_path):
         mm.plot_grid()
         mm.plot_ibound()
 
-        fpth = os.path.join(str(function_tmpdir), "pathline2.png")
+        fpth = function_tmpdir / "pathline2.png"
         plt.savefig(fpth)
         plt.close()
 
@@ -470,18 +469,15 @@ def test_modpath(function_tmpdir, example_data_path):
         mm.plot_grid()
         mm.plot_ibound()
 
-        fpth = os.path.join(str(function_tmpdir), "pathline3.png")
+        fpth = function_tmpdir / "pathline3.png"
         plt.savefig(fpth)
         plt.close()
 
 
-@requires_pkg("pandas")
 def test_mp6_timeseries_load(example_data_path):
-    pth = str(example_data_path / "mp5")
+    pth = example_data_path / "mp5"
     files = [
-        os.path.join(pth, name)
-        for name in sorted(os.listdir(pth))
-        if ".timeseries" in name
+        pth / name for name in sorted(os.listdir(pth)) if ".timeseries" in name
     ]
     for file in files:
         print(file)
@@ -538,15 +534,126 @@ def eval_timeseries(file):
     )
 
 
+def get_mf2005_model(name, ws, alt=False):
+    nrow = 3
+    ncol = 4
+    nlay = 2
+    nper = 1
+    l1_ibound = np.array(
+        [[[-1, -1, -1, -1], [-1, 1, 1, -1], [-1, -1, -1, -1]]]
+    )
+    l2_ibound = np.ones((1, nrow, ncol))
+    l2_ibound_alt = np.ones((1, nrow, ncol))
+    l2_ibound_alt[0, 0, 0] = 0
+    bt1 = np.ones((1, nrow, ncol)) + 5
+    bt2 = np.ones((1, nrow, ncol)) + 3
+    ctx = SimpleNamespace(
+        nrow=nrow,
+        ncol=ncol,
+        nlay=nlay,
+        nper=nper,
+        l1_ibound=l1_ibound,
+        l2_ibound=l2_ibound,
+        l2_ibound_alt=l2_ibound_alt,
+        ibound=np.concatenate(
+            (l1_ibound, l2_ibound_alt if alt else l2_ibound), axis=0
+        ),
+        laytype=[0, 0 if alt else 1],
+        hnoflow=-888,
+        hdry=-777,
+        top=np.zeros((1, nrow, ncol)) + 10,
+        bt1=bt1,
+        bt2=bt2,
+        botm=np.concatenate((bt1, bt2), axis=0),
+        ipakcb=740,
+    )
+
+    # create modflow model
+    m = flopy.modflow.Modflow(
+        modelname=name + ("alt" if alt else ""),
+        namefile_ext="nam",
+        version="mf2005",
+        exe_name="mf2005",
+        model_ws=ws,
+    )
+
+    # dis
+    dis = flopy.modflow.ModflowDis(
+        model=m,
+        nlay=nlay,
+        nrow=nrow,
+        ncol=ncol,
+        nper=nper,
+        delr=1.0,
+        delc=1.0,
+        laycbd=0,
+        top=ctx.top,
+        botm=ctx.botm,
+        perlen=1,
+        nstp=1,
+        tsmult=1,
+        steady=True,
+    )
+
+    # bas
+    bas = flopy.modflow.ModflowBas(
+        model=m,
+        ibound=ctx.ibound,
+        strt=10,
+        ifrefm=True,
+        ixsec=False,
+        ichflg=False,
+        stoper=None,
+        hnoflo=ctx.hnoflow,
+        extension="bas",
+        unitnumber=None,
+        filenames=None,
+    )
+    # lpf
+    lpf = flopy.modflow.ModflowLpf(
+        model=m,
+        ipakcb=ctx.ipakcb,
+        laytyp=ctx.laytype,
+        hk=10,
+        vka=10,
+        hdry=ctx.hdry,
+    )
+
+    # well
+    wel = flopy.modflow.ModflowWel(
+        model=m,
+        ipakcb=ctx.ipakcb,
+        stress_period_data={0: [[1, 1, 1, -5.0]]},
+    )
+
+    flopy.modflow.ModflowPcg(
+        m, hclose=0.001, rclose=0.001, mxiter=150, iter1=30
+    )
+
+    ocspd = {}
+    for p in range(nper):
+        ocspd[(p, 0)] = ["save head", "save budget"]
+    ocspd[(0, 0)] = [
+        "save head",
+        "save budget",
+    ]  # pretty sure it just uses the last for everything
+    flopy.modflow.ModflowOc(m, stress_period_data=ocspd)
+
+    return m, ctx
+
+
 @requires_exe("mf2005", "mp6")
-@parametrize_with_cases("ml", cases=Mp6Cases1)
-def test_data_pass_no_modflow(ml):
+@pytest.mark.parametrize("alt", [True, False])
+def test_data_pass_no_modflow(function_tmpdir, alt):
     """
     test that user can pass and create a mp model without an accompanying modflow model
-    Returns
-    -------
-
     """
+
+    ml, ctx = get_mf2005_model("data_pass", function_tmpdir, alt)
+    ml.write_input()
+    success, buff = ml.run_model()
+    assert success, pformat(buff)
+
     dis_file = f"{ml.name}.dis"
     bud_file = f"{ml.name}.cbc"
     hd_file = f"{ml.name}.hds"
@@ -572,30 +679,30 @@ def test_data_pass_no_modflow(ml):
     assert mp.budget_file == bud_file
     assert mp.dis_file == dis_file
     assert mp.nrow_ncol_nlay_nper == (
-        Mp6Cases1.nrow,
-        Mp6Cases1.ncol,
-        Mp6Cases1.nlay,
-        Mp6Cases1.nper,
+        ctx.nrow,
+        ctx.ncol,
+        ctx.nlay,
+        ctx.nper,
     )
 
     mpbas = flopy.modpath.Modpath6Bas(
         mp,
-        hnoflo=Mp6Cases1.hnoflow,
-        hdry=Mp6Cases1.hdry,
+        hnoflo=ctx.hnoflow,
+        hdry=ctx.hdry,
         def_face_ct=0,
         bud_label=None,
         def_iface=None,
-        laytyp=Mp6Cases1.laytype[ml.name],
-        ibound=Mp6Cases1.ibound[ml.name],
+        laytyp=ctx.laytype,
+        ibound=ctx.ibound,
         prsity=0.30,
         prsityCB=0.30,
         extension="mpbas",
         unitnumber=86,
     )
     # test layertype is created correctly
-    assert np.isclose(mpbas.laytyp.array, Mp6Cases1.laytype[ml.name]).all()
+    assert np.isclose(mpbas.laytyp.array, ctx.laytype).all()
     # test ibound is pulled from modflow model
-    assert np.isclose(mpbas.ibound.array, Mp6Cases1.ibound[ml.name]).all()
+    assert np.isclose(mpbas.ibound.array, ctx.ibound).all()
 
     sim = flopy.modpath.Modpath6Sim(model=mp)
     stl = flopy.modpath.mp6sim.StartingLocationsFile(model=mp)
@@ -613,14 +720,17 @@ def test_data_pass_no_modflow(ml):
 
 
 @requires_exe("mf2005", "mp6")
-@parametrize_with_cases("ml", cases=Mp6Cases1)
-def test_data_pass_with_modflow(ml):
+@pytest.mark.parametrize("alt", [True, False])
+def test_data_pass_with_modflow(function_tmpdir, alt):
     """
     test that user specified head files etc. are preferred over files from the modflow model
-    Returns
-    -------
-
     """
+
+    ml, ctx = get_mf2005_model("data_pass", function_tmpdir, alt)
+    ml.write_input()
+    success, buff = ml.run_model()
+    assert success, pformat(buff)
+
     dis_file = f"{ml.name}.dis"
     bud_file = f"{ml.name}.cbc"
     hd_file = f"{ml.name}.hds"
@@ -646,21 +756,21 @@ def test_data_pass_with_modflow(ml):
     assert mp.budget_file == bud_file
     assert mp.dis_file == dis_file
     assert mp.nrow_ncol_nlay_nper == (
-        Mp6Cases1.nrow,
-        Mp6Cases1.ncol,
-        Mp6Cases1.nlay,
-        Mp6Cases1.nper,
+        ctx.nrow,
+        ctx.ncol,
+        ctx.nlay,
+        ctx.nper,
     )
 
     mpbas = flopy.modpath.Modpath6Bas(
         mp,
-        hnoflo=Mp6Cases1.hnoflow,
-        hdry=Mp6Cases1.hdry,
+        hnoflo=ctx.hnoflow,
+        hdry=ctx.hdry,
         def_face_ct=0,
         bud_label=None,
         def_iface=None,
-        laytyp=Mp6Cases1.laytype[ml.name],
-        ibound=Mp6Cases1.ibound[ml.name],
+        laytyp=ctx.laytype,
+        ibound=ctx.ibound,
         prsity=0.30,
         prsityCB=0.30,
         extension="mpbas",
@@ -668,9 +778,9 @@ def test_data_pass_with_modflow(ml):
     )
 
     # test layertype is created correctly!
-    assert np.isclose(mpbas.laytyp.array, Mp6Cases1.laytype[ml.name]).all()
+    assert np.isclose(mpbas.laytyp.array, ctx.laytype).all()
     # test ibound is pulled from modflow model
-    assert np.isclose(mpbas.ibound.array, Mp6Cases1.ibound[ml.name]).all()
+    assert np.isclose(mpbas.ibound.array, ctx.ibound).all()
 
     sim = flopy.modpath.Modpath6Sim(model=mp)
     stl = flopy.modpath.mp6sim.StartingLocationsFile(model=mp)
@@ -688,14 +798,17 @@ def test_data_pass_with_modflow(ml):
 
 
 @requires_exe("mf2005", "mp6")
-@parametrize_with_cases("ml", cases=Mp6Cases1)
-def test_just_from_model(ml):
+@pytest.mark.parametrize("alt", [True, False])
+def test_just_from_model(function_tmpdir, alt):
     """
     test that user specified head files etc. are preferred over files from the modflow model
-    Returns
-    -------
-
     """
+
+    ml, ctx = get_mf2005_model("data_pass", function_tmpdir, alt)
+    ml.write_input()
+    success, buff = ml.run_model()
+    assert success, pformat(buff)
+
     dis_file = f"{ml.name}.dis"
     bud_file = f"{ml.name}.cbc"
     hd_file = f"{ml.name}.hds"
@@ -721,16 +834,16 @@ def test_just_from_model(ml):
     assert mp.budget_file == bud_file
     assert mp.dis_file == dis_file
     assert mp.nrow_ncol_nlay_nper == (
-        Mp6Cases1.nrow,
-        Mp6Cases1.ncol,
-        Mp6Cases1.nlay,
-        Mp6Cases1.nper,
+        ctx.nrow,
+        ctx.ncol,
+        ctx.nlay,
+        ctx.nper,
     )
 
     mpbas = flopy.modpath.Modpath6Bas(
         mp,
-        hnoflo=Mp6Cases1.hnoflow,
-        hdry=Mp6Cases1.hdry,
+        hnoflo=ctx.hnoflow,
+        hdry=ctx.hdry,
         def_face_ct=0,
         bud_label=None,
         def_iface=None,
@@ -742,10 +855,10 @@ def test_just_from_model(ml):
         unitnumber=86,
     )
     # test layertype is created correctly!
-    assert np.isclose(mpbas.laytyp.array, Mp6Cases1.laytype[ml.name]).all()
+    assert np.isclose(mpbas.laytyp.array, ctx.laytype).all()
 
     # test ibound is pulled from modflow model
-    assert np.isclose(mpbas.ibound.array, Mp6Cases1.ibound[ml.name]).all()
+    assert np.isclose(mpbas.ibound.array, ctx.ibound).all()
 
     sim = flopy.modpath.Modpath6Sim(model=mp)
     stl = flopy.modpath.mp6sim.StartingLocationsFile(model=mp)
@@ -762,9 +875,9 @@ def test_just_from_model(ml):
     assert success
 
 
-def make_mp_model(nm, m, ws, use_pandas):
+def get_mp6_model(m, ctx, name, ws, use_pandas):
     mp = flopy.modpath.Modpath6(
-        modelname=nm,
+        modelname=name,
         simfile_ext="mpsim",
         namefile_ext="mpnam",
         version="modpath",
@@ -782,13 +895,13 @@ def make_mp_model(nm, m, ws, use_pandas):
 
     mpbas = flopy.modpath.Modpath6Bas(
         mp,
-        hnoflo=Mp6Cases2.hnoflow,
-        hdry=Mp6Cases2.hdry,
+        hnoflo=ctx.hnoflow,
+        hdry=ctx.hdry,
         def_face_ct=0,
         bud_label=None,
         def_iface=None,
-        laytyp=Mp6Cases2.laytype["mf1"],
-        ibound=Mp6Cases2.ibound["mf1"],
+        laytyp=ctx.laytype,
+        ibound=ctx.ibound,
         prsity=0.30,
         prsityCB=0.30,
         extension="mpbas",
@@ -807,35 +920,34 @@ def make_mp_model(nm, m, ws, use_pandas):
     stldata[1]["xloc0"] = 0.1
     stldata[1]["yloc0"] = 0.2
     stl.data = stldata
+
     return mp
 
 
 @requires_exe("mf2005")
-@parametrize_with_cases("ml", cases=Mp6Cases2)
-def test_mp_wpandas_wo_pandas(ml):
-    """
-    test that user can pass and create a mp model without an accompanying modflow model
-    Returns
-    -------
+def test_mp_pandas(function_tmpdir):
+    name = "mp_pandas"
+    ml, ctx = get_mf2005_model(name, function_tmpdir)
+    ml.write_input()
+    success, _ = ml.run_model()
+    assert success
 
-    """
-
-    mp_pandas = make_mp_model("pandas", ml, ml.model_ws, use_pandas=True)
-    mp_no_pandas = make_mp_model(
-        "no_pandas", ml, ml.model_ws, use_pandas=False
+    mp_pandas = get_mp6_model(ml, ctx, name, function_tmpdir, use_pandas=True)
+    mp_no_pandas = get_mp6_model(
+        ml, ctx, name, function_tmpdir, use_pandas=False
     )
 
     mp_no_pandas.write_input()
     success, buff = mp_no_pandas.run_model()
-    assert success
+    assert success, pformat(buff)
 
     mp_pandas.write_input()
     success, buff = mp_pandas.run_model()
-    assert success
+    assert success, pformat(buff)
 
     # read the two files and ensure they are identical
-    with open(mp_pandas.get_package("loc").fn_path, "r") as f:
+    with open(mp_pandas.get_package("loc").fn_path) as f:
         particles_pandas = f.readlines()
-    with open(mp_no_pandas.get_package("loc").fn_path, "r") as f:
+    with open(mp_no_pandas.get_package("loc").fn_path) as f:
         particles_no_pandas = f.readlines()
     assert particles_pandas == particles_no_pandas

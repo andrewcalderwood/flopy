@@ -3,9 +3,11 @@ mfstructure module.  Contains classes related to package structure
 
 
 """
+
 import ast
 import keyword
 import os
+import warnings
 from enum import Enum
 from textwrap import TextWrapper
 
@@ -79,7 +81,6 @@ class Dfn:
             "gwf-dis",  # dfn completed  tex updated
             "gwf-disv",  # dfn completed  tex updated
             "gwf-disu",  # dfn completed  tex updated
-            "lnf-disl",  # dfn completed  tex updated
             "gwf-ic",  # dfn completed  tex updated
             "gwf-npf",  # dfn completed  tex updated
             "gwf-sto",  # dfn completed  tex updated
@@ -198,7 +199,7 @@ class DfnPackage(Dfn):
         )
         self.dfn_list = package.dfn
 
-    def get_block_structure_dict(self, path, common, model_file):
+    def get_block_structure_dict(self, path, common, model_file, block_parent):
         block_dict = {}
         dataset_items_in_block = {}
         self.dataset_items_needed_dict = {}
@@ -208,8 +209,11 @@ class DfnPackage(Dfn):
         # get header dict
         header_dict = {}
         for item in self.dfn_list[0]:
-            if item == "multi-package":
-                header_dict["multi-package"] = True
+            if isinstance(item, str):
+                if item == "multi-package":
+                    header_dict["multi-package"] = True
+                if item.startswith("package-type"):
+                    header_dict["package-type"] = item.split(" ")[1]
         for dfn_entry in self.dfn_list[1:]:
             # load next data item
             new_data_item_struct = MFDataItemStructure()
@@ -222,7 +226,10 @@ class DfnPackage(Dfn):
             ):
                 # create block
                 current_block = MFBlockStructure(
-                    new_data_item_struct.block_name, path, model_file
+                    new_data_item_struct.block_name,
+                    path,
+                    model_file,
+                    block_parent,
                 )
                 # put block in block_dict
                 block_dict[current_block.name] = current_block
@@ -268,9 +275,9 @@ class DfnPackage(Dfn):
                 current_block.add_dataset(block_dataset_struct)
             else:
                 new_data_item_struct.block_type = block_type
-                dataset_items_in_block[
-                    new_data_item_struct.name
-                ] = new_data_item_struct
+                dataset_items_in_block[new_data_item_struct.name] = (
+                    new_data_item_struct
+                )
 
                 # if data item belongs to existing dataset(s)
                 item_location_found = False
@@ -479,7 +486,7 @@ class DfnFile(Dfn):
         dfn_fp.close()
         return name_dict
 
-    def get_block_structure_dict(self, path, common, model_file):
+    def get_block_structure_dict(self, path, common, model_file, block_parent):
         self.dfn_list = []
         block_dict = {}
         dataset_items_in_block = {}
@@ -504,6 +511,8 @@ class DfnFile(Dfn):
                         line_lst[3],
                         line_lst[4],
                     ]
+            elif len(line_lst) > 2 and line_lst[1] == "package-type":
+                header_dict["package-type"] = line_lst[2]
         # load file definitions
         for line in dfn_fp:
             if self._valid_line(line):
@@ -525,7 +534,10 @@ class DfnFile(Dfn):
                 ):
                     # create block
                     current_block = MFBlockStructure(
-                        new_data_item_struct.block_name, path, model_file
+                        new_data_item_struct.block_name,
+                        path,
+                        model_file,
+                        block_parent,
                     )
                     # put block in block_dict
                     block_dict[current_block.name] = current_block
@@ -573,9 +585,9 @@ class DfnFile(Dfn):
                     current_block.add_dataset(block_dataset_struct)
                 else:
                     new_data_item_struct.block_type = block_type
-                    dataset_items_in_block[
-                        new_data_item_struct.name
-                    ] = new_data_item_struct
+                    dataset_items_in_block[new_data_item_struct.name] = (
+                        new_data_item_struct
+                    )
 
                     # if data item belongs to existing dataset(s)
                     item_location_found = False
@@ -639,9 +651,9 @@ class DfnFile(Dfn):
                             key,
                             val,
                         ) in new_data_item_struct.keystring_dict.items():
-                            keystring_items_needed_dict[
-                                key
-                            ] = new_data_item_struct
+                            keystring_items_needed_dict[key] = (
+                                new_data_item_struct
+                            )
 
                     # if data set does not exist
                     if not item_location_found:
@@ -1163,11 +1175,11 @@ class MFDataItemStructure:
     def is_file_name(self):
         if (
             self.name.lower() in self.file_name_keywords
-            and self.file_name_keywords[self.name.lower()] == True
+            and self.file_name_keywords[self.name.lower()] is True
         ):
             return True
         for key, item in self.contained_keywords.items():
-            if self.name.lower().find(key) != -1 and item == True:
+            if self.name.lower().find(key) != -1 and item is True:
                 return True
         return False
 
@@ -1448,6 +1460,29 @@ class MFDataStructure:
             )
 
     @property
+    def basic_item(self):
+        if not self.parent_block.parent_package.stress_package:
+            return False
+        for item in self.data_item_structures:
+            if (
+                (
+                    (item.repeating or item.optional)
+                    and not (
+                        item.is_cellid or item.is_aux or item.is_boundname
+                    )
+                )
+                or item.jagged_array is not None
+                or item.type == DatumType.keystring
+                or item.type == DatumType.keyword
+                or (
+                    item.description is not None
+                    and "keyword `NONE'" in item.description
+                )
+            ):
+                return False
+        return True
+
+    @property
     def is_mname(self):
         for item in self.data_item_structures:
             if item.is_mname:
@@ -1521,7 +1556,7 @@ class MFDataStructure:
                 item.type != DatumType.record
                 and item.type != DatumType.repeating_record
             )
-            or record == True
+            or record is True
         ):
             if item.name not in self.expected_data_items:
                 raise StructException(
@@ -1982,13 +2017,14 @@ class MFBlockStructure:
 
     """
 
-    def __init__(self, name, path, model_block):
+    def __init__(self, name, path, model_block, parent_package):
         # initialize
         self.data_structures = {}
         self.block_header_structure = []
         self.name = name
         self.path = path + (self.name,)
         self.model_block = model_block
+        self.parent_package = parent_package
 
     def repeating(self):
         if len(self.block_header_structure) > 0:
@@ -2093,11 +2129,27 @@ class MFInputFileStructure:
         self.read_as_arrays = False
 
         self.blocks, self.header = dfn_file.get_block_structure_dict(
-            self.path, common, model_file
+            self.path,
+            common,
+            model_file,
+            self,
         )
+        self.has_packagedata = "packagedata" in self.blocks
+        self.has_perioddata = "period" in self.blocks
         self.multi_package_support = "multi-package" in self.header
+        self.stress_package = (
+            "package-type" in self.header
+            and self.header["package-type"] == "stress-package"
+        )
+        self.advanced_stress_package = (
+            "package-type" in self.header
+            and self.header["package-type"] == "advanced-stress-package"
+        )
         self.dfn_list = dfn_file.dfn_list
         self.sub_package = self._sub_package()
+
+    def advanced_package(self):
+        return self.has_packagedata and self.has_perioddata
 
     def _sub_package(self):
         mfstruct = MFStructure()
@@ -2458,6 +2510,9 @@ class MFStructure:
         # set up structure classes
         self.sim_struct = MFSimulationStructure()
 
+        # initialize flopy dict keys
+        MFStructure().flopy_dict["solution_packages"] = {}
+
         if self.load_from_dfn_files:
             mf_dfn = Dfn()
             dfn_files = mf_dfn.get_file_list()
@@ -2471,7 +2526,7 @@ class MFStructure:
                 dfn_path, tail = os.path.split(os.path.realpath(__file__))
                 dfn_path = os.path.join(dfn_path, "dfn")
                 dfn_file = os.path.join(dfn_path, file)
-                with open(dfn_file, "r") as fd_dfn:
+                with open(dfn_file) as fd_dfn:
                     for line in fd_dfn:
                         if len(line) < 1 or line[0] != "#":
                             break
@@ -2488,7 +2543,20 @@ class MFStructure:
                                     "parameter_name": line_lst[6],
                                 }
                                 MFStructure().flopy_dict[line_lst[3]] = sp_dict
-
+                            elif line_lst[2] == "solution_package":
+                                MFStructure().flopy_dict["solution_packages"][
+                                    line_lst[3]
+                                ] = line_lst[4:]
+            if len(MFStructure().flopy_dict["solution_packages"]) == 0:
+                MFStructure().flopy_dict["solution_packages"]["ims"] = ["*"]
+                warnings.warn(
+                    "Package definition files (dfn) do not define a solution "
+                    "package.  This can happen if your dfn files are out of "
+                    "sync.  Auto-loaded default IMS solution package metadata."
+                    "  In the future auto-loading default metadata will be "
+                    "deprecated.",
+                    DeprecationWarning,
+                )
             # process each file
             for file in dfn_files:
                 self.sim_struct.process_dfn(DfnFile(file))
@@ -2496,6 +2564,16 @@ class MFStructure:
         else:
             package_list = PackageContainer.package_list()
             for package in package_list:
+                # process header
+                for entry in package.dfn[0][1:]:
+                    if (
+                        isinstance(entry, list)
+                        and entry[0] == "solution_package"
+                    ):
+                        MFStructure().flopy_dict["solution_packages"][
+                            package.package_abbr
+                        ] = entry[1:]
+                # process each package
                 self.sim_struct.process_dfn(DfnPackage(package))
             self.sim_struct.tag_read_as_arrays()
 

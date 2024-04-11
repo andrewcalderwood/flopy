@@ -232,7 +232,6 @@ class Mt3dBtn(Package):
         filenames=None,
         **kwargs,
     ):
-
         if unitnumber is None:
             unitnumber = Mt3dBtn._defaultunit()
         elif unitnumber == 0:
@@ -535,7 +534,7 @@ class Mt3dBtn(Package):
                 array_free_format=False,
             )
         else:
-            thickness = mf.modelgrid.thick
+            thickness = mf.modelgrid.cell_thickness
             self.dz = Util3d(
                 self.parent,
                 (nlay, nrow, ncol),
@@ -702,7 +701,7 @@ class Mt3dBtn(Package):
 
         # A3
         f_btn.write(
-            "{0:10d}{1:10d}{2:10d}{3:10d}{4:10d}{5:10d}\n".format(
+            "{:10d}{:10d}{:10d}{:10d}{:10d}{:10d}\n".format(
                 self.nlay,
                 self.nrow,
                 self.ncol,
@@ -716,26 +715,26 @@ class Mt3dBtn(Package):
         f_btn.write(f"{self.tunit:4s}{self.lunit:4s}{self.munit:4s}\n")
 
         # A5
-        if self.parent.adv != None:
-            f_btn.write("{0:2s}".format("T"))
+        if self.parent.adv is not None:
+            f_btn.write("T ")
         else:
-            f_btn.write("{0:2s}".format("F"))
-        if self.parent.dsp != None:
-            f_btn.write("{0:2s}".format("T"))
+            f_btn.write("F ")
+        if self.parent.dsp is not None:
+            f_btn.write("T ")
         else:
-            f_btn.write("{0:2s}".format("F"))
-        if self.parent.ssm != None:
-            f_btn.write("{0:2s}".format("T"))
+            f_btn.write("F ")
+        if self.parent.ssm is not None:
+            f_btn.write("T ")
         else:
-            f_btn.write("{0:2s}".format("F"))
-        if self.parent.rct != None:
-            f_btn.write("{0:2s}".format("T"))
+            f_btn.write("F ")
+        if self.parent.rct is not None:
+            f_btn.write("T ")
         else:
-            f_btn.write("{0:2s}".format("F"))
-        if self.parent.gcg != None:
-            f_btn.write("{0:2s}".format("T"))
+            f_btn.write("F ")
+        if self.parent.gcg is not None:
+            f_btn.write("T ")
         else:
-            f_btn.write("{0:2s}".format("F"))
+            f_btn.write("F ")
         f_btn.write("\n")
 
         # A6
@@ -772,10 +771,7 @@ class Mt3dBtn(Package):
         f_btn.write(
             f"{self.ifmtcn:10d}{self.ifmtnp:10d}{self.ifmtrf:10d}{self.ifmtdp:10d}"
         )
-        if self.savucn == True:
-            ss = "T"
-        else:
-            ss = "F"
+        ss = "T" if self.savucn else "F"
         f_btn.write(f"{ss:>10s}\n")
 
         # A16, A17
@@ -802,7 +798,7 @@ class Mt3dBtn(Package):
             f_btn.write(f"{nobs:10d}{self.nprobs:10d}\n")
             for i in range(nobs):
                 f_btn.write(
-                    "{0:10d}{1:10d}{2:10d}\n".format(
+                    "{:10d}{:10d}{:10d}\n".format(
                         self.obs[i, 0] + 1,
                         self.obs[i, 1] + 1,
                         self.obs[i, 2] + 1,
@@ -810,7 +806,7 @@ class Mt3dBtn(Package):
                 )
 
         # A20 CHKMAS, NPRMAS
-        if self.chkmas == True:
+        if self.chkmas:
             ss = "T"
         else:
             ss = "F"
@@ -824,7 +820,7 @@ class Mt3dBtn(Package):
             s += "\n"
             f_btn.write(s)
             f_btn.write(
-                "{0:10.4G}{1:10d}{2:10.4G}{3:10.4G}\n".format(
+                "{:10.4G}{:10d}{:10.4G}{:10.4G}\n".format(
                     self.dt0[t],
                     self.mxstrn[t],
                     self.ttsmult[t],
@@ -876,12 +872,12 @@ class Mt3dBtn(Package):
             print("   loading COMMENT LINES A1 AND A2...")
         line = f.readline()
         if model.verbose:
-            print("A1: ".format(line.strip()))
+            print(f"A1: {line.strip()}")
 
         # A2
         line = f.readline()
         if model.verbose:
-            print("A2: ".format(line.strip()))
+            print(f"A2: {line.strip()}")
 
         # New keyword options in MT3D-USGS are found here
         line = f.readline()

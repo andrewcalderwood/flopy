@@ -21,13 +21,23 @@
 ## Initial steps
 
 The FloPy release procedure is mostly automated with GitHub Actions in [`release.yml`](../.github/workflows/release.yml), but there are a few manual steps to complete first:
-    
+
 1.  Update `usgsprograms.txt` in the [GitHub pymake repository](https://github.com/modflowpy/pymake) with the path to the new MODFLOW 6 release. Also update all other targets in `usgsprograms.txt` with the path to new releases.
 
 2.  Trigger a new release for the [executables repository](https://github.com/MODFLOW-USGS/executables), either via the GitHub Actions UI or GitHub CLI. See the executables repo's `DEVELOPER.md` for more information. Wait for the release to be published.
 
 3. Update the authors in `CITATION.cff` for the Software/Code citation for FloPy, if required.
- 
+
+4. If this is a minor or major release, review deprecation warnings (if this is a patch release, skip this step). Correct any deprecation version numbers if necessary &mdash; for instance, if the warning was added in the latest development cycle but incorrectly anticipated the forthcoming release number (e.g., if this release was expected to be minor but was promoted to major). If any deprecations are due this release, remove the corresponding features. FloPy loosely follows [NEP 23](https://numpy.org/neps/nep-0023-backwards-compatibility.html) deprecation guidelines: removal is recommended after at least 1 year or 2 non-patch releases.
+
+    To search for deprecation warnings with git: `git grep [-[A/B/C]N] <pattern>`, where N is the optional number of extra lines of context and A/B/C selects post-context/pre-context/both, respectively. Some terms to search for:
+
+    - deprecated
+    - .. deprecated::
+    - DEPRECATED
+    - DeprecationWarning
+    - FutureWarning
+
 
 ## Release procedure
 
@@ -66,8 +76,11 @@ If the branch name does not end with `rc`, the workflow will proceed to open a P
 
 **Note:** the PR should be merged, not squashed. Squashing removes the commit history from the `master` branch and causes `develop` and `master` to diverge, which can cause future PRs updating `master` to replay commits from previous releases.
 
-Publishing the release triggers jobs to publish the `flopy` package to PyPI and open a PR updating `develop` from `master`. This PR also updates version strings, incrementing the patch version number.
+Publishing the release triggers a final job to publish the `flopy` package to PyPI.
 
+##### Trusted publishing
+
+The automated release workflow assumes [trusted publishing](https://docs.pypi.org/trusted-publishers/) has been configured in the PyPI admin interface. A GitHub environment called `release` is also required (however it needs no secrets or environment variables).
 
 ### Manual releases
 
@@ -83,15 +96,11 @@ As described above, making a release manually involves the following steps:
 
 - Run `python scripts/update_version.py -v <semver>` to update the version number stored in `version.txt` and `flopy/version.py`. For an approved release use the `--approve` flag.
 
-- Update MODFLOW 6 dfn files in the repository and MODFLOW 6 package classes by running `python -c 'import flopy; flopy.mf6.utils.generate_classes(branch="master", backup=False)'`
-  
+- Update MODFLOW 6 dfn files in the repository and MODFLOW 6 package classes by running `python -m flopy.mf6.utils.generate_classes --ref master --no-backup`
+
 - Run `isort` and `black` on the `flopy` module. This can be achieved by running `python scripts/pull_request_prepare.py` from the project root. The commands `isort .` and `black .` can also be run individually instead.
 
-- Use `run_notebooks.py` in the `scripts` directory to rerun all notebooks in:
-
-    - `examples\Notebooks` directory.
-    - `examples\Notebooks\groundwater_paper` directory.
-    - `examples\Notebooks\FAQ` directory.
+- Use `run_notebooks.py` in the `scripts` directory to rerun all notebooks in `.docs/Notebooks`.
 
 - Generate a changelog starting from the last release with [git cliff](https://github.com/orhun/git-cliff), for instance: `git cliff --config cliff.toml --unreleased --tag=<release version number>`.
 
@@ -110,7 +119,7 @@ As described above, making a release manually involves the following steps:
 
 1.  Merge the `master` branch into the `develop` branch.
 
-2.  Set the version as appropriate: `python scripts/update_version.py -v <semver>`.
+2.  Set the development version as appropriate: `python scripts/update_version.py -v <version>`. The version number must comply with [PEP 440](https://peps.python.org/pep-0440/).
 
 3.  Lint Python files: `python scripts/pull_request_prepare.py`
 
