@@ -140,7 +140,7 @@ class StructuredGrid(Grid):
         y-location points for the edges of the model grid
 
     Methods
-    ----------
+    -------
     get_cell_vertices(i, j)
         returns vertices for a single cell at row, column i, j.
     """
@@ -192,14 +192,18 @@ class StructuredGrid(Grid):
         if top is not None:
             assert self.__nrow * self.__ncol == len(np.ravel(top))
         if botm is not None:
-            assert self.__nrow * self.__ncol == len(np.ravel(botm[0]))
-            if nlay is not None:
-                self.__nlay = nlay
-            else:
-                if laycbd is not None:
-                    self.__nlay = len(botm) - np.count_nonzero(laycbd)
+            if botm.ndim == 3:
+                assert self.__nrow * self.__ncol == len(np.ravel(botm[0]))
+                if nlay is not None:
+                    self.__nlay = nlay
                 else:
-                    self.__nlay = len(botm)
+                    if laycbd is not None:
+                        self.__nlay = len(botm) - np.count_nonzero(laycbd)
+                    else:
+                        self.__nlay = len(botm)
+            elif botm.ndim == 2:
+                assert botm.shape == (self.__nrow, self.__ncol)
+                self.__nlay = 1
         else:
             self.__nlay = nlay
         if laycbd is not None:
@@ -930,7 +934,7 @@ class StructuredGrid(Grid):
                     "x, y point given is outside of the model area"
                 )
         else:
-            col = np.where(xcomp)[0][-1]
+            col = np.asarray(xcomp).nonzero()[0][-1]
 
         ycomp = y < ye
         if np.all(ycomp) or not np.any(ycomp):
@@ -941,7 +945,7 @@ class StructuredGrid(Grid):
                     "x, y point given is outside of the model area"
                 )
         else:
-            row = np.where(ycomp)[0][-1]
+            row = np.asarray(ycomp).nonzero()[0][-1]
         if np.any(np.isnan([row, col])):
             row = col = np.nan
             if z is not None:

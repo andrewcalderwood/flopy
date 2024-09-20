@@ -254,7 +254,7 @@ class MFSimulationData:
         self.verify_data = True
         self.debug = False
         self.verbose = True
-        self.verbosity_level = VerbosityLevel.normal
+        self._verbosity_level = VerbosityLevel.normal
         self.max_columns_user_set = False
         self.max_columns_auto_set = False
         self.use_pandas = True
@@ -274,6 +274,17 @@ class MFSimulationData:
         # --- temporary variables ---
         # other external files referenced
         self.referenced_files = {}
+
+    @property
+    def verbosity_level(self):
+        return self._verbosity_level
+
+    @verbosity_level.setter
+    def verbosity_level(self, val):
+        if isinstance(val, VerbosityLevel):
+            self._verbosity_level = val
+        elif isinstance(val, int):
+            self._verbosity_level = VerbosityLevel(val)
 
     @property
     def lazy_io(self):
@@ -592,7 +603,7 @@ class MFSimulationBase(PackageContainer):
         Override __repr__ to print custom string.
 
         Returns
-        --------
+        -------
             repr string : str
                 string describing object
 
@@ -604,7 +615,7 @@ class MFSimulationBase(PackageContainer):
         Override __str__ to print custom string.
 
         Returns
-        --------
+        -------
             str string : str
                 string describing object
 
@@ -660,7 +671,7 @@ class MFSimulationBase(PackageContainer):
         Return a list of model names associated with this simulation.
 
         Returns
-        --------
+        -------
             list: list of model names
 
         """
@@ -672,7 +683,7 @@ class MFSimulationBase(PackageContainer):
         Return list of exchange files associated with this simulation.
 
         Returns
-        --------
+        -------
             list: list of exchange names
 
         """
@@ -1309,6 +1320,26 @@ class MFSimulationBase(PackageContainer):
                         mfdata_except=mfde, package="nam", message=message
                     )
 
+    def _create_package(self, package_type, package_data):
+        if package_data is None:
+            return None
+        if not isinstance(package_data, dict):
+            message = (
+                "Error occurred while creating the solution package "
+                f"{package_type}.  Package data must be provided in a "
+                f"dictionary.  User provided type {type(package_data)}."
+            )
+            raise MFDataException(package=package_type, message=message)
+        # find package - only supporting utl packages for now
+        package_obj = self.package_factory(package_type, "utl")
+        if package_obj is not None:
+            # determine file name
+            if "filename" not in package_data:
+                package_data["filename"] = f"{self.name}.{package_type}"
+            # create package which should automatically register with the
+            # simulation
+            pkg = package_obj(self, **package_data)
+
     @staticmethod
     def _rename_package_group(group_dict, name):
         package_type_count = {}
@@ -1668,7 +1699,7 @@ class MFSimulationBase(PackageContainer):
                 default is None, i.e. use the builtion print
 
         Returns
-        --------
+        -------
             success : bool
             buff : list of lines of stdout
 
@@ -1738,13 +1769,24 @@ class MFSimulationBase(PackageContainer):
 
             self._remove_package(package)
 
+        # if this is a package referenced from a filerecord, remove filerecord
+        # from name file
+        file_record_name = f"_{package.package_type}_filerecord"
+        if hasattr(self.name_file, file_record_name):
+            file_record = getattr(self.name_file, file_record_name)
+            if isinstance(file_record, mfdata.MFData):
+                file_record.set_data(None)
+            if hasattr(self.name_file, package.package_type):
+                child_pkgs = getattr(self.name_file, package.package_type)
+                child_pkgs._remove_packages(package.filename, True)
+
     @property
     def model_dict(self):
         """
         Return a dictionary of models associated with this simulation.
 
         Returns
-        --------
+        -------
             model dict : dict
                 dictionary of models
 
@@ -1763,7 +1805,7 @@ class MFSimulationBase(PackageContainer):
                 will get the first model.
 
         Returns
-        --------
+        -------
             model : MFModel
 
         """
@@ -1791,7 +1833,7 @@ class MFSimulationBase(PackageContainer):
                 Name of exchange file to get
 
         Returns
-        --------
+        -------
             exchange package : MFPackage
 
         """
@@ -1811,7 +1853,7 @@ class MFSimulationBase(PackageContainer):
                 Name of mover file to get
 
         Returns
-        --------
+        -------
             mover package : MFPackage
 
         """
@@ -2034,7 +2076,7 @@ class MFSimulationBase(PackageContainer):
                 Produce a filename for this package
 
         Returns
-        --------
+        -------
             (path : tuple, package structure : MFPackageStructure)
 
         """
@@ -2111,6 +2153,13 @@ class MFSimulationBase(PackageContainer):
                 package.filename = file_name
                 self._other_files[file_name] = package
 
+            # If this package is declared in the namefile options block,
+            # update namefile
+            file_record = f"_{package.package_type}_filerecord"
+            if hasattr(self.name_file, file_record):
+                fr_obj = getattr(self.name_file, file_record)
+                fr_obj.set_data(package.filename)
+
         if package.package_type.lower() in self.structure.package_struct_objs:
             return (
                 path,
@@ -2164,7 +2213,7 @@ class MFSimulationBase(PackageContainer):
                Solution group of model
 
         Returns
-        --------
+        -------
            model_structure_object : MFModelStructure
         """
 
@@ -2213,7 +2262,7 @@ class MFSimulationBase(PackageContainer):
                 solution package file name
 
         Returns
-        --------
+        -------
             solution_package : MFPackage
 
         """
@@ -2269,7 +2318,7 @@ class MFSimulationBase(PackageContainer):
 
 
         Returns
-        --------
+        -------
             valid : bool
                 Whether this is a valid simulation
 
@@ -2507,7 +2556,7 @@ class MFSimulationBase(PackageContainer):
                     MFList dictionary key. (default is None)
 
         Returns
-        --------
+        -------
              axes: (list)
                 matplotlib.pyplot.axes objects
 

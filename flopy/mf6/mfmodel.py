@@ -445,7 +445,9 @@ class MFModel(PackageContainer, ModelInterface):
             if ncpl is None:
                 ncpl = np.array([dis.nodes.get_data()], dtype=int)
             cell2d = dis.cell2d.array
-            idomain = np.ones(dis.nodes.array, np.int32)
+            idomain = dis.idomain.array
+            if idomain is None:
+                idomain = np.ones(dis.nodes.array, dtype=int)
             if cell2d is None:
                 if (
                     self.simulation.simulation_data.verbosity_level.value
@@ -455,13 +457,7 @@ class MFModel(PackageContainer, ModelInterface):
                         "WARNING: cell2d information missing. Functionality of "
                         "the UnstructuredGrid will be limited."
                     )
-                iverts = None
-                xcenters = None
-                ycenters = None
-            else:
-                iverts = [list(i)[4:] for i in cell2d]
-                xcenters = dis.cell2d.array["xc"]
-                ycenters = dis.cell2d.array["yc"]
+
             vertices = dis.vertices.array
             if vertices is None:
                 if (
@@ -478,9 +474,7 @@ class MFModel(PackageContainer, ModelInterface):
 
             self._modelgrid = UnstructuredGrid(
                 vertices=vertices,
-                iverts=iverts,
-                xcenters=xcenters,
-                ycenters=ycenters,
+                cell2d=cell2d,
                 top=dis.top.array,
                 botm=dis.bot.array,
                 idomain=idomain,
@@ -514,7 +508,7 @@ class MFModel(PackageContainer, ModelInterface):
                         angrot=self._modelgrid.angrot,
                     )
             else:
-                botm = dis.botm.array
+                botm = dis.bottom.array
                 idomain = dis.idomain.array
                 if idomain is None:
                     force_resync = True
@@ -522,7 +516,83 @@ class MFModel(PackageContainer, ModelInterface):
                 self._modelgrid = VertexGrid(
                     vertices=dis.vertices.array,
                     cell1d=dis.cell1d.array,
-                    top=dis.top.array,
+                    top=None,
+                    botm=botm,
+                    idomain=idomain,
+                    lenuni=dis.length_units.array,
+                    crs=self._modelgrid.crs,
+                    xoff=self._modelgrid.xoffset,
+                    yoff=self._modelgrid.yoffset,
+                    angrot=self._modelgrid.angrot,
+                )
+        elif self.get_grid_type() == DiscretizationType.DIS2D:
+            dis = self.get_package("dis2d")
+            if not hasattr(dis, "_init_complete"):
+                if not hasattr(dis, "delr"):
+                    # dis package has not yet been initialized
+                    return self._modelgrid
+                else:
+                    # dis package has been partially initialized
+                    self._modelgrid = StructuredGrid(
+                        delc=dis.delc.array,
+                        delr=dis.delr.array,
+                        top=None,
+                        botm=None,
+                        idomain=None,
+                        lenuni=None,
+                        crs=self._modelgrid.crs,
+                        xoff=self._modelgrid.xoffset,
+                        yoff=self._modelgrid.yoffset,
+                        angrot=self._modelgrid.angrot,
+                    )
+            else:
+                botm = dis.bottom.array
+                idomain = dis.idomain.array
+                if idomain is None:
+                    force_resync = True
+                    idomain = self._resolve_idomain(idomain, botm)
+                self._modelgrid = StructuredGrid(
+                    delc=dis.delc.array,
+                    delr=dis.delr.array,
+                    top=None,
+                    botm=botm,
+                    idomain=idomain,
+                    lenuni=dis.length_units.array,
+                    crs=self._modelgrid.crs,
+                    xoff=self._modelgrid.xoffset,
+                    yoff=self._modelgrid.yoffset,
+                    angrot=self._modelgrid.angrot,
+                )
+        elif self.get_grid_type() == DiscretizationType.DISV2D:
+            dis = self.get_package("disv2d")
+            if not hasattr(dis, "_init_complete"):
+                if not hasattr(dis, "cell2d"):
+                    # disv package has not yet been initialized
+                    return self._modelgrid
+                else:
+                    # disv package has been partially initialized
+                    self._modelgrid = VertexGrid(
+                        vertices=dis.vertices.array,
+                        cell2d=dis.cell2d.array,
+                        top=None,
+                        botm=None,
+                        idomain=None,
+                        lenuni=None,
+                        crs=self._modelgrid.crs,
+                        xoff=self._modelgrid.xoffset,
+                        yoff=self._modelgrid.yoffset,
+                        angrot=self._modelgrid.angrot,
+                    )
+            else:
+                botm = dis.bottom.array
+                idomain = dis.idomain.array
+                if idomain is None:
+                    force_resync = True
+                    idomain = self._resolve_idomain(idomain, botm)
+                self._modelgrid = VertexGrid(
+                    vertices=dis.vertices.array,
+                    cell2d=dis.cell2d.array,
+                    top=None,
                     botm=botm,
                     idomain=idomain,
                     lenuni=dis.length_units.array,
@@ -534,15 +604,10 @@ class MFModel(PackageContainer, ModelInterface):
         else:
             return self._modelgrid
 
-        if self.get_grid_type() != DiscretizationType.DISV:
-            # get coordinate data from dis file
-            xorig = dis.xorigin.get_data()
-            yorig = dis.yorigin.get_data()
-            angrot = dis.angrot.get_data()
-        else:
-            xorig = self._modelgrid.xoffset
-            yorig = self._modelgrid.yoffset
-            angrot = self._modelgrid.angrot
+        # get coordinate data from dis file
+        xorig = dis.xorigin.get_data()
+        yorig = dis.yorigin.get_data()
+        angrot = dis.angrot.get_data()
 
         # resolve offsets
         if xorig is None:
@@ -644,10 +709,13 @@ class MFModel(PackageContainer, ModelInterface):
 
     @property
     def output(self):
+        budgetkey = None
+        if self.model_type == "gwt6":
+            budgetkey = "MASS BUDGET FOR ENTIRE MODEL"
         try:
-            return self.oc.output
+            return MF6Output(self.oc, budgetkey=budgetkey)
         except AttributeError:
-            return MF6Output(self)
+            return MF6Output(self, budgetkey=budgetkey)
 
     def export(self, f, **kwargs):
         """Method to export a model to a shapefile or netcdf file
@@ -659,7 +727,7 @@ class MFModel(PackageContainer, ModelInterface):
             or dictionary of ....
         **kwargs : keyword arguments
             modelgrid: flopy.discretization.Grid
-                User supplied modelgrid object which will supercede the built
+                User supplied modelgrid object which will supersede the built
                 in modelgrid object
             if fmt is set to 'vtk', parameters of Vtk initializer
 
@@ -1217,6 +1285,20 @@ class MFModel(PackageContainer, ModelInterface):
             is not None
         ):
             return DiscretizationType.DISV1D
+        elif (
+            package_recarray.search_data(
+                f"dis2d{structure.get_version_string()}", 0
+            )
+            is not None
+        ):
+            return DiscretizationType.DIS2D
+        elif (
+            package_recarray.search_data(
+                f"disv2d{structure.get_version_string()}", 0
+            )
+            is not None
+        ):
+            return DiscretizationType.DISV2D
 
         return DiscretizationType.UNDEFINED
 
@@ -1227,11 +1309,15 @@ class MFModel(PackageContainer, ModelInterface):
         -------
         IMS package : ModflowIms
         """
-        solution_group = self.simulation.name_file.solutiongroup.get_data()
+        solution_group = self.simulation.name_file.solutiongroup.get_data(0)
         for record in solution_group:
-            for model_name in record[2:]:
-                if model_name == self.name:
-                    return self.simulation.get_solution_package(record[1])
+            for name in record.dtype.names:
+                if name == "slntype" or name == "slnfname":
+                    continue
+                if record[name] == self.name:
+                    return self.simulation.get_solution_package(
+                        record.slnfname
+                    )
         return None
 
     def get_steadystate_list(self):

@@ -797,9 +797,6 @@ class PlotCrossSection:
         col = self.get_grid_line_collection(**kwargs)
         if col is not None:
             ax.add_collection(col)
-            # ax.set_xlim(self.extent[0], self.extent[1])
-            # ax.set_ylim(self.extent[2], self.extent[3])
-
         return col
 
     def plot_bc(
@@ -1563,7 +1560,7 @@ class PlotCrossSection:
             dictionary defined by node number which contains model
             patch vertices.
         fill_between : bool
-            flag to create polygons that mimick the matplotlib fill between
+            flag to create polygons that mimic the matplotlib fill between
             method. Only used by the plot_fill_between method.
         **kwargs : dictionary
             keyword arguments passed to matplotlib.collections.PatchCollection

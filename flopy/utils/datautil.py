@@ -143,7 +143,7 @@ class PyListUtil:
         compares two lists, returns true if they are identical (with max_error)
     spilt_data_line : (line : string) : list
         splits a string apart (using split) and then cleans up the results
-        dealing with various MODFLOW input file releated delimiters.  returns
+        dealing with various MODFLOW input file related delimiters.  returns
         the delimiter type used.
     clean_numeric : (text : string) : string
         returns a cleaned up version of 'text' with only numeric characters
@@ -606,7 +606,9 @@ class MultiList:
                             (entry_point[0][-1], new_location)
                         )
                     else:
-                        entry_point[0].append(callback(entry_point[1]))
+                        entry_point[0].append(
+                            callback(tuple(i + val for i in entry_point[1]))
+                        )
             entry_points = new_entry_points
 
     def first_item(self):

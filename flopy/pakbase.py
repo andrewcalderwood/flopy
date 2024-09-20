@@ -296,7 +296,7 @@ class PackageInterface:
         ----------
         f : str or file handle
             String defining file name or file handle for summary file
-            of check method output. If a sting is passed a file handle
+            of check method output. If a string is passed a file handle
             is created. If f is None, check method does not write
             results to a summary file. (default is None)
         verbose : bool
@@ -742,7 +742,7 @@ class Package(PackageInterface):
     @staticmethod
     def _get_sfac_columns():
         """
-        This should be overriden for individual packages that support an
+        This should be overridden for individual packages that support an
         sfac multiplier for individual list columns
 
         """
@@ -812,7 +812,7 @@ class Package(PackageInterface):
                 MfList dictionary key. (default is None)
 
         Returns
-        ----------
+        -------
         axes : list
             Empty list is returned if filename_base is not None. Otherwise
             a list of matplotlib.pyplot.axis are returned.
@@ -838,37 +838,10 @@ class Package(PackageInterface):
         axes = PlotUtilities._plot_package_helper(self, **kwargs)
         return axes
 
-    def to_shapefile(self, filename, **kwargs):
-        """
-        Export 2-D, 3-D, and transient 2-D model data to shapefile (polygons).
-        Adds an attribute for each layer in each data array
-
-        Parameters
-        ----------
-        filename : str
-            Shapefile name to write
-
-        Returns
-        ----------
-        None
-
-        See Also
-        --------
-
-        Notes
-        -----
-
-        Examples
-        --------
-        >>> import flopy
-        >>> ml = flopy.modflow.Modflow.load('test.nam')
-        >>> ml.lpf.to_shapefile('test_hk.shp')
-
-        """
-        import warnings
-
-        warnings.warn("to_shapefile() is deprecated. use .export()")
-        self.export(filename)
+    def to_shapefile(self, *args, **kwargs):
+        """Raises AttributeError, use :meth:`export`."""
+        # deprecated 3.2.4, changed to raise AttributeError version 3.8
+        raise AttributeError(".to_shapefile() was removed; use .export()")
 
     def webdoc(self):
         """Open the web documentation."""
@@ -888,8 +861,7 @@ class Package(PackageInterface):
         Every Package needs its own write_file function
 
         """
-        print("IMPLEMENTATION ERROR: write_file must be overloaded")
-        return
+        raise NotImplementedError("write_file must be overloaded")
 
     @staticmethod
     def load(
@@ -1002,15 +974,15 @@ class Package(PackageInterface):
                         it += 1
                 it += 1
 
-        # add auxillary information to nwt options
+        # add auxiliary information to nwt options
         if nwt_options is not None:
             if options:
                 if options[0] == "noprint":
                     nwt_options.noprint = True
                     if len(options) > 1:
-                        nwt_options.auxillary = options[1:]
+                        nwt_options.auxiliary = options[1:]
                 else:
-                    nwt_options.auxillary = options
+                    nwt_options.auxiliary = options
 
             options = nwt_options
 
@@ -1034,9 +1006,9 @@ class Package(PackageInterface):
                         if options[0] == "noprint":
                             nwt_options.noprint = True
                             if len(options) > 1:
-                                nwt_options.auxillary = options[1:]
+                                nwt_options.auxiliary = options[1:]
                         else:
-                            nwt_options.auxillary = options
+                            nwt_options.auxiliary = options
 
                     options = nwt_options
                 else:

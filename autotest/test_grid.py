@@ -19,7 +19,12 @@ from flopy.mf6 import MFSimulation
 from flopy.modflow import Modflow, ModflowDis
 from flopy.utils import import_optional_dependency
 from flopy.utils.crs import get_authority_crs
-from flopy.utils.cvfdutil import gridlist_to_disv_gridprops, to_cvfd
+from flopy.utils.cvfdutil import (
+    area_of_polygon,
+    centroid_of_polygon,
+    gridlist_to_disv_gridprops,
+    to_cvfd,
+)
 from flopy.utils.triangle import Triangle
 from flopy.utils.voronoi import VoronoiGrid
 
@@ -131,7 +136,6 @@ def test_get_vertices():
 
     xgrid = mg.xvertices
     ygrid = mg.yvertices
-    # a1 = np.array(mg.xyvertices)
     a1 = np.array(
         [
             [xgrid[0, 0], ygrid[0, 0]],
@@ -220,9 +224,7 @@ def test_get_rc_from_node_coordinates():
     delr = [0.5] * 5 + [2.0] * 5
     nrow = 10
     ncol = 10
-    mfdis = ModflowDis(
-        mf, nrow=nrow, ncol=ncol, delr=delr, delc=delc
-    )  # , xul=50, yul=1000)
+    mfdis = ModflowDis(mf, nrow=nrow, ncol=ncol, delr=delr, delc=delc)
     ygrid, xgrid, zgrid = mfdis.get_node_coordinates()
     for i in range(nrow):
         for j in range(ncol):
@@ -527,14 +529,17 @@ def test_unstructured_from_verts_and_iverts(
     assert g.nnodes == g.ncpl.sum() == 1090
 
 
-def test_unstructured_from_gridspec(example_data_path):
+def unstructured_from_gridspec_driver(example_data_path, gsf_file):
     model_path = example_data_path / "freyberg_usg"
-    spec_path = model_path / "freyberg.usg.gsf"
+    spec_path = model_path / gsf_file
     grid = UnstructuredGrid.from_gridspec(spec_path)
 
     with open(spec_path) as file:
         lines = file.readlines()
         split = [line.strip().split() for line in lines]
+
+        # remove comments
+        split = [item for item in split if item[0] != "#"]
 
         # check number of nodes
         nnodes = int(split[1][0])
@@ -578,6 +583,16 @@ def test_unstructured_from_gridspec(example_data_path):
         # check elevation
         assert max(grid.top) == max([xyz[2] for xyz in expected_verts])
         assert min(grid.botm) == min([xyz[2] for xyz in expected_verts])
+
+
+def test_unstructured_from_gridspec(example_data_path):
+    unstructured_from_gridspec_driver(example_data_path, "freyberg.usg.gsf")
+
+
+def test_unstructured_from_gridspec_comments(example_data_path):
+    unstructured_from_gridspec_driver(
+        example_data_path, "freyberg.usg.gsf.with_comment"
+    )
 
 
 @pytest.mark.parametrize(
@@ -877,6 +892,7 @@ def test_grid_crs_exceptions():
         sg.set_coord_info(prj=not_a_file)
 
 
+@requires_pkg("shapely")
 def test_tocvfd1():
     vertdict = {}
     vertdict[0] = [(0, 0), (100, 0), (100, 100), (0, 100), (0, 0)]
@@ -885,6 +901,7 @@ def test_tocvfd1():
     assert 6 in iverts[0]
 
 
+@requires_pkg("shapely")
 def test_tocvfd2():
     vertdict = {}
     vertdict[0] = [(0, 0), (1, 0), (1, 1), (0, 1), (0, 0)]
@@ -893,6 +910,7 @@ def test_tocvfd2():
     assert [1, 4, 5, 6, 2, 1] in iverts
 
 
+@requires_pkg("shapely")
 def test_tocvfd3():
     # create the nested grid described in the modflow-usg documentation
 
@@ -925,25 +943,49 @@ def test_tocvfd3():
         yoff=200,
         idomain=idomain,
     )
-    gridprops = gridlist_to_disv_gridprops([sg1, sg2])
-    assert "ncpl" in gridprops
-    assert "nvert" in gridprops
-    assert "vertices" in gridprops
-    assert "cell2d" in gridprops
 
-    ncpl = gridprops["ncpl"]
-    nvert = gridprops["nvert"]
-    vertices = gridprops["vertices"]
-    cell2d = gridprops["cell2d"]
-    assert ncpl == 121
-    assert nvert == 148
-    assert len(vertices) == nvert
-    assert len(cell2d) == 121
+    with pytest.deprecated_call():
+        gridprops = gridlist_to_disv_gridprops([sg1, sg2])
+        assert "ncpl" in gridprops
+        assert "nvert" in gridprops
+        assert "vertices" in gridprops
+        assert "cell2d" in gridprops
 
-    # spot check information for cell 28 (zero based)
-    answer = [28, 250.0, 150.0, 7, 38, 142, 143, 45, 46, 44, 38]
-    for i, j in zip(cell2d[28], answer):
-        assert i == j, f"{i} not equal {j}"
+        ncpl = gridprops["ncpl"]
+        nvert = gridprops["nvert"]
+        vertices = gridprops["vertices"]
+        cell2d = gridprops["cell2d"]
+        assert ncpl == 121
+        assert nvert == 148
+        assert len(vertices) == nvert
+        assert len(cell2d) == 121
+
+        # spot check information for cell 28 (zero based)
+        answer = [28, 250.0, 150.0, 7, 38, 142, 143, 45, 46, 44, 38]
+        for i, j in zip(cell2d[28], answer):
+            assert i == j, f"{i} not equal {j}"
+
+
+@requires_pkg("shapely")
+def test_area_centroid_polygon():
+    pts = [
+        (685053.450097303, 6295544.549730939),
+        (685055.8377391606, 6295545.167682521),
+        (685057.3028430222, 6295542.712221102),
+        (685055.3500302795, 6295540.907246565),
+        (685053.2040466429, 6295542.313082705),
+        (685053.450097303, 6295544.549730939),
+    ]
+    xc, yc = centroid_of_polygon(pts)
+    result = np.array([xc, yc])
+    answer = np.array((685055.1035824707, 6295543.12059913))
+    assert np.allclose(
+        result, answer
+    ), "cvfdutil centroid of polygon incorrect"
+    x, y = list(zip(*pts))
+    result = area_of_polygon(x, y)
+    answer = 11.228131838368032
+    assert np.allclose(result, answer), "cvfdutil area of polygon incorrect"
 
 
 def test_unstructured_grid_shell():
@@ -1408,3 +1450,64 @@ def test_geo_dataframe(structured_grid, vertex_grid, unstructured_grid):
                     raise AssertionError(
                         f"Cell vertices incorrect for node={node}"
                     )
+
+
+def test_unstructured_iverts_cleanup():
+    grid = GridCases.structured_small()
+
+    # begin building unstructured grid information
+    top = grid.top.ravel()
+    botm = grid.botm[0].ravel()
+    idomain = np.ones(botm.shape, dtype=int)
+
+    # build iac and ja
+    neighbors = grid.neighbors(method="rook", reset=True)
+    iac, ja = [], []
+    for cell, neigh in neighbors.items():
+        iac.append(len(neigh) + 1)
+        ja.extend(
+            [
+                cell,
+            ]
+            + neigh
+        )
+
+    # build iverts and verts without using shared vertices
+    verts, iverts = [], []
+    xverts, yverts = grid.cross_section_vertices
+    ivt = 0
+    for cid, xvs in enumerate(xverts):
+        yvs = yverts[cid]
+        ivts = []
+        for ix, vert in enumerate(xvs[:-1]):
+            ivts.append(ivt)
+            verts.append([ivt, vert, yvs[ix]])
+            ivt += 1
+
+        ivts.append(ivts[0])
+        iverts.append(ivts)
+
+    ugrid = UnstructuredGrid(
+        vertices=verts,
+        iverts=iverts,
+        xcenters=grid.xcellcenters.ravel(),
+        ycenters=grid.ycellcenters.ravel(),
+        iac=iac,
+        ja=ja,
+        top=top,
+        botm=botm,
+        idomain=idomain,
+    )
+
+    if ugrid.nvert != (grid.ncpl * 4):
+        raise AssertionError(
+            "UnstructuredGrid is being built incorrectly for test case"
+        )
+
+    cleaned_vert_num = (grid.nrow + 1) * (grid.ncol + 1)
+    clean_ugrid = ugrid.clean_iverts()
+
+    if clean_ugrid.nvert != cleaned_vert_num:
+        raise AssertionError(
+            "Improper number of vertices for cleaned 'shared' iverts"
+        )

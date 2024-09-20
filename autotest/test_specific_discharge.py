@@ -319,7 +319,7 @@ def basic_check(Qx_ext, Qy_ext, Qz_ext):
 
 
 def local_balance_check(Qx_ext, Qy_ext, Qz_ext, hdsfile=None, model=None):
-    # calculate water blance at every cell
+    # calculate water balance at every cell
     local_balance = (
         Qx_ext[:, :, :-1]
         - Qx_ext[:, :, 1:]
@@ -430,7 +430,7 @@ def specific_discharge_comprehensive(function_tmpdir):
     assert np.isnan(qx[1, 0, 1])
 
     # overall check
-    overall = np.nansum(qz)  # np.nansum(qx) + np.nansum(qy) + np.nansum(qz)
+    overall = np.nansum(qz)
     assert np.allclose(overall, -4.43224582939148)
 
     # plot discharge in map view
