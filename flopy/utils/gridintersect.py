@@ -150,7 +150,7 @@ class GridIntersect:
         mfgrid : flopy modflowgrid
             MODFLOW grid as implemented in flopy
         method : str, optional
-            Options are either 'vertex' which uses shapely interesection operations
+            Options are either 'vertex' which uses shapely intersection operations
             or 'structured' which uses optimized methods that only work for structured
             grids. The default is None, which determines intersection method based on
             the grid type.
@@ -429,57 +429,28 @@ class GridIntersect:
         cellids : array_like
             array of cellids
         """
-        shapely_geo = import_optional_dependency("shapely.geometry")
-
-        # for cell2d rec-arrays
-        geoms = []
-        cellids = []
-        if isinstance(self.mfgrid._cell2d, np.recarray):
-            for icell in self.mfgrid._cell2d.icell2d:
-                points = []
-                icverts = [
-                    f"icvert_{i}"
-                    for i in range(self.mfgrid._cell2d["ncvert"][icell])
-                ]
-                for iv in self.mfgrid._cell2d[icverts][icell]:
-                    if self.local:
-                        xy = (
-                            self.mfgrid._vertices.xv[iv],
-                            self.mfgrid._vertices.yv[iv],
+        shapely = import_optional_dependency("shapely")
+        if self.local:
+            geoms = [
+                shapely.polygons(
+                    list(
+                        zip(
+                            *self.mfgrid.get_local_coords(
+                                *np.array(
+                                    self.mfgrid.get_cell_vertices(node)
+                                ).T
+                            )
                         )
-                    else:
-                        xy = (
-                            self.mfgrid.verts[iv, 0],
-                            self.mfgrid.verts[iv, 1],
-                        )
-                    points.append(xy)
-                # close the polygon, if necessary
-                if points[0] != points[-1]:
-                    points.append(points[0])
-                geoms.append(shapely_geo.Polygon(points))
-                cellids.append(icell)
-        # for cell2d lists
-        elif isinstance(self.mfgrid._cell2d, list):
-            for icell in range(len(self.mfgrid._cell2d)):
-                points = []
-                for iv in self.mfgrid._cell2d[icell][4:]:
-                    if self.local:
-                        xy = (
-                            self.mfgrid._vertices[iv][1],
-                            self.mfgrid._vertices[iv][2],
-                        )
-                    else:
-                        xy = (
-                            self.mfgrid.verts[iv, 0],
-                            self.mfgrid.verts[iv, 1],
-                        )
-                    points.append(xy)
-                # close the polygon, if necessary
-                if points[0] != points[-1]:
-                    points.append(points[0])
-                geoms.append(shapely_geo.Polygon(points))
-                cellids.append(icell)
-        return np.array(geoms), np.array(cellids)
+                    )
+                )
+                for node in range(self.mfgrid.ncpl)
+            ]
+        else:
+            geoms = [
+                shapely.polygons(self.mfgrid.get_cell_vertices(node))
+                for node in range(self.mfgrid.ncpl)
+            ]
+        return np.array(geoms), np.arange(self.mfgrid.ncpl)
 
     def _rect_grid_to_shape_list(self):
         """internal method, list of shapely polygons for structured grid cells.
@@ -942,10 +913,6 @@ class GridIntersect:
             keep_cid = qcellids
 
         names = ["cellids", "ixshapes"]
-        # self.mfgrid.grid_type == "structured":
-        #     cid_dtype = "i"
-        # else:
-        #     cid_dtype = "O"
         formats = ["O", "O"]
         rec = np.recarray(len(keep_pts), names=names, formats=formats)
 
@@ -2275,13 +2242,17 @@ class ModflowGridIndices:
         """
         jpos = []
 
-        if x == arr[-1]:
+        if np.isclose(x, arr[-1]):
             return len(arr) - 2
 
-        if x < min(arr[0], arr[-1]):
-            return None
+        xmin = min(arr[0], arr[-1])
+        xmax = max(arr[0], arr[-1])
 
-        if x > max(arr[0], arr[-1]):
+        if np.isclose(x, xmin):
+            x = xmin
+        if np.isclose(x, xmax):
+            x = xmax
+        if not (xmin <= x <= xmax):
             return None
 
         # go through each position
@@ -2290,7 +2261,6 @@ class ModflowGridIndices:
             xr = arr[j + 1]
             frac = (x - xl) / (xr - xl)
             if 0.0 <= frac <= 1.0:
-                # if min(xl, xr) <= x < max(xl, xr):
                 jpos.append(j)
         if len(jpos) == 0:
             return None
